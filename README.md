@@ -1,8 +1,8 @@
-# ConsoleSeq 1.3.1
+# ConsoleSeq 1.3.2
 
 For the complete Russian tutorial, troubleshooting guide, instrument list, pattern-bank examples, custom sample guide, and save/load instructions, see [README_RU.md](README_RU.md).
 
-ConsoleSeq is a keyboard-driven terminal sequencer with a C++17 real-time engine and a Python curses UI. Version 1.3.1 includes 60 generated/modelled presets, 40 GeneralUser GS instruments rendered by FluidSynth, and 167 bundled WAV/MP3 one-shots arranged in 19 drum-kit tabs. It supports colored gated notes (`X ===`), a high-contrast pattern cursor, up to 32 channels, 512 patterns and 512 song slots, atomic JSON persistence, a portable Windows EXE, and an optional Windows installer.
+ConsoleSeq is a keyboard-driven terminal sequencer with a C++17 real-time engine and a Python curses UI. Version 1.3.2 includes 60 generated/modelled presets, 40 GeneralUser GS instruments rendered by FluidSynth, and 167 bundled WAV/MP3 one-shots arranged in 19 drum-kit tabs. Every custom or bundled sample can be transposed per step. It supports colored gated notes (`X ===`), a high-contrast pattern cursor, opaque popup menus, up to 32 channels, 512 patterns and 512 song slots, atomic JSON persistence, a portable Windows EXE, and an optional Windows installer.
 
 ## Windows quick start
 
@@ -45,6 +45,7 @@ chmod +x setup.sh run.sh
 | `Tab` | Pattern, Song, Mixer focus |
 | `Space` | Toggle a step or cycle a Song cell |
 | `E`, then `Left/Right` | Edit the selected `X ===` note length; `E`/`Esc` finishes |
+| `[`/`]`, `{`/`}` | Transpose the selected note or sample by a semitone/octave |
 | `I`, `Enter` | Add an instrument; edit selected channel |
 | `n`, `N` | Add one pattern; add a bank of 16 |
 | `Page Up/Down` | Move between 16-pattern or 16-slot banks |

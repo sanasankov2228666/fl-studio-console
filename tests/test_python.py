@@ -31,6 +31,9 @@ class ConsoleSeqCoreTests(unittest.TestCase):
                          ["Kick", "Snare", "HiHat", "Piano", "Bass"])
         self.assertEqual(self.engine.get_channel(0).type, ChannelType.DRUM)
         self.assertTrue(self.engine.get_step(0, 0, 0))
+        for channel_index in range(self.engine.channel_count()):
+            root = self.engine.get_channel(channel_index).base_note
+            self.assertEqual(self.engine.get_note(0, channel_index, 1), root)
         self.engine.set_step(0, 3, 3, True)
         self.engine.set_note(0, 3, 3, 65)
         self.engine.set_velocity(0, 3, 3, 0.55)
@@ -67,6 +70,25 @@ class ConsoleSeqCoreTests(unittest.TestCase):
             self.assertTrue(self.engine.load_project(str(path)), self.engine.last_error())
             self.assertAlmostEqual(self.engine.bpm(), 137.5)
             self.assertTrue(self.engine.get_channel(3).solo)
+
+    def test_legacy_v4_drum_notes_migrate_to_channel_root(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "legacy-v4.cseq"
+            self.assertTrue(self.engine.save_project(str(path)), self.engine.last_error())
+            data = json.loads(path.read_text(encoding="utf-8"))
+            data["version"] = 4
+            for pattern in data["patterns"]:
+                for step in pattern["grid"][0]:
+                    step["note"] = 60
+            data["patterns"][0]["grid"][0][0]["note"] = 61
+            path.write_text(json.dumps(data), encoding="utf-8")
+
+            loaded = Engine()
+            self.assertTrue(loaded.load_project(str(path)), loaded.last_error())
+            kick_root = loaded.get_channel(0).base_note
+            self.assertEqual(kick_root, 36)
+            self.assertEqual(loaded.get_note(0, 0, 0), kick_root + 1)
+            self.assertEqual(loaded.get_note(0, 0, 1), kick_root)
 
     def test_load_mono_wav_and_render(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -110,6 +132,30 @@ class ConsoleSeqCoreTests(unittest.TestCase):
             one_shot = self.engine.render_offline(0.30)
             self.assertGreater(max(abs(value) for value in one_shot[tail_start:]), 0.1)
             self.assertLessEqual(max(abs(value) for value in one_shot), 1.0)
+
+    def test_custom_sample_pitch_changes_playback_rate(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            wav_path = Path(directory) / "pitched.wav"
+            with wave.open(str(wav_path), "wb") as wav:
+                wav.setnchannels(1)
+                wav.setsampwidth(2)
+                wav.setframerate(44100)
+                sample = int(0.40 * 32767).to_bytes(2, "little", signed=True)
+                wav.writeframes(sample * 22050)  # 0.5 seconds
+            self.engine.clear_pattern(0)
+            for channel_index in range(self.engine.channel_count()):
+                self.engine.set_channel_mute(channel_index, True)
+            channel = self.engine.add_channel("perc_click", "Pitched sample")
+            self.assertTrue(self.engine.set_channel_sample(channel, str(wav_path)))
+            root = self.engine.get_channel(channel).base_note
+            self.engine.set_step(0, channel, 0, True)
+            self.engine.set_note(0, channel, 0, root)
+            original = self.engine.render_offline(0.36)
+            tail = int(0.30 * 44100) * 2
+            self.assertGreater(max(abs(value) for value in original[tail:]), 0.1)
+            self.engine.set_note(0, channel, 0, root + 12)
+            octave_up = self.engine.render_offline(0.36)
+            self.assertLess(max(abs(value) for value in octave_up[tail:]), 0.0001)
 
     def test_load_mp3_and_render(self) -> None:
         with tempfile.TemporaryDirectory(prefix="ConsoleSeq-mp3-") as directory:
@@ -164,6 +210,11 @@ class ConsoleSeqCoreTests(unittest.TestCase):
         self.assertEqual(self.engine.get_pattern(duplicate).name, "Demo Beat Copy")
         created = self.engine.add_pattern("Bridge")
         self.assertEqual(self.engine.get_pattern(created).name, "Bridge")
+        for channel_index in range(self.engine.channel_count()):
+            self.assertEqual(
+                self.engine.get_note(created, channel_index, 0),
+                self.engine.get_channel(channel_index).base_note,
+            )
         self.engine.set_synth_param(4, "oscillator", 1)
         self.engine.set_synth_param(4, "attack", 0.1)
         self.engine.set_synth_param(4, "decay", 0.2)
@@ -422,6 +473,16 @@ class ConsoleSeqUiLogicTests(unittest.TestCase):
                         if len(call) >= 4 and call[0] == 5 and call[1] == 16]
         self.assertTrue(cursor_calls)
         self.assertTrue(cursor_calls[-1][3] & curses.A_REVERSE)
+
+    def test_popup_box_clears_every_row_with_opaque_background(self) -> None:
+        self.ui.screen = _FakeScreen(height=30, width=120)
+        self.ui.colors_enabled = False
+        with patch("console_seq.ui.curses.color_pair", return_value=0):
+            self.ui.box(4, 10, 6, 24, "OPAQUE", True, popup=True)
+        cleared_rows = {(call[0], call[1]) for call in self.ui.screen.calls
+                        if len(call) >= 4 and call[1] == 10 and call[2] == " " * 24
+                        and call[3] & curses.A_REVERSE}
+        self.assertEqual(cleared_rows, {(row, 10) for row in range(4, 10)})
 
     def test_copy_paste_new_pattern_and_clear(self) -> None:
         self.ui.copy_pattern()

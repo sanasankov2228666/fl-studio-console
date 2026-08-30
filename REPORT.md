@@ -1,4 +1,4 @@
-# ConsoleSeq 1.3.1 implementation report
+# ConsoleSeq 1.3.2 implementation report
 
 ## Result
 
@@ -8,9 +8,11 @@ Three user-supplied kit directories were copied into the portable asset library.
 
 Pattern steps now store an optional duration. A normal `X` retains classic one-shot/natural-decay behavior. Pressing `E` on the `X` or any continuation cell enters length editing; Left/Right produces a colored `X ===` gate and `E`/Esc exits. Explicit gates stop procedural voices, SoundFont notes, and long user samples at the selected boundary. Durations survive copy/paste and project round trips.
 
-Version 1.3.1 gives the Pattern cursor a dedicated black-on-white background instead of relying on underline support. The selected cell is therefore visible on active `X`, continuation `=`, and empty `.` cells independently of channel color and Windows terminal underline behavior.
+Version 1.3.2 gives the Pattern cursor a dedicated black-on-white background instead of relying on underline support. The selected cell is therefore visible on active `X`, continuation `=`, and empty `.` cells independently of channel color and Windows terminal underline behavior. Popup rectangles are now fully painted with a separate blue background before their border and content are drawn, eliminating text bleed-through from Pattern, Song, Channels, and Mixer panels.
 
-The save prompt was replaced with a wide-character editor, fixing the Windows curses failure that produced filenames containing invalid U+FFFF characters. `.cseq` version 4 persists channel/preset data, SoundFont bank/program, mixer values, external sample paths, portable `asset://` kit references, patterns, note/velocity/duration values, and the full Song arrangement. Saving remains atomic through a temporary file plus replacement.
+Every drum/sample voice now uses fractional playback position and linear interpolation. Per-step MIDI pitch controls transpose both user-loaded WAV/MP3 files and all bundled kit one-shots; an octave up doubles playback speed and an octave down halves it. The existing one-shot/gated-length behavior remains intact, and pitch editing from a continuation `=` resolves to the owning `X`.
+
+The save prompt was replaced with a wide-character editor, fixing the Windows curses failure that produced filenames containing invalid U+FFFF characters. `.cseq` version 5 persists channel/preset data, SoundFont bank/program, mixer values, external sample paths, portable `asset://` kit references, patterns, pitch/velocity/duration values, and the full Song arrangement. Loading v4 projects includes a guarded drum-note migration so previously ignored default MIDI values cannot unexpectedly transpose old beats. Saving remains atomic through a temporary file plus replacement.
 
 ## Architecture and packaging
 
@@ -27,7 +29,7 @@ The save prompt was replaced with a wide-character editor, fixing the Windows cu
 Verified on 64-bit Windows with Python 3.12:
 
 - native CTest suite: passed;
-- 25 Python engine/UI integration tests: passed, including a high-contrast cursor regression test;
+- 28 Python engine/UI integration tests: passed, including sample-pitch, legacy-project migration, opaque-popup, and high-contrast cursor regression tests;
 - all 100 preset definitions rendered non-silent audio;
 - GeneralUser GS loaded through FluidSynth and survived project save/load;
 - all 167 bundled audio files decoded successfully (163 WAV, 4 MP3, zero failures);
@@ -39,4 +41,4 @@ Verified on 64-bit Windows with Python 3.12:
 
 ## Deliberate limitations
 
-The sequencer currently stores one pitch per step and one active FluidSynth note per channel; it is not yet a graphical polyphonic piano roll. External user samples are referenced rather than copied into `.cseq`. Recording, VST plug-ins, automation lanes, effects chains, MIDI input, time-stretching, and WAV export remain roadmap items. The included kit audio was supplied by the project owner as free material; its original pack terms remain separate from the application-code license.
+The sequencer currently stores one pitch per step and one active FluidSynth note per channel; it is not yet a graphical polyphonic piano roll. Sample transposition changes playback rate and duration; tempo-preserving time-stretch is not implemented. External user samples are referenced rather than copied into `.cseq`. Recording, VST plug-ins, automation lanes, effects chains, MIDI input, and WAV export remain roadmap items. The included kit audio was supplied by the project owner as free material; its original pack terms remain separate from the application-code license.

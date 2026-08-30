@@ -408,6 +408,12 @@ void Engine::new_project() {
   project.channels = {kick, snare, hat, piano, bass};
 
   Pattern demo(5, kDefaultSteps, "Demo Beat");
+  for (int channel = 0; channel < demo.channel_count(); ++channel) {
+    for (int step = 0; step < demo.step_count(); ++step) {
+      demo.set_note(channel, step,
+                    project.channels[static_cast<std::size_t>(channel)].base_note_);
+    }
+  }
   for (int step : {0, 4, 8, 12}) demo.set_step(0, step, true);
   for (int step : {4, 12}) demo.set_step(1, step, true);
   for (int step = 0; step < kDefaultSteps; step += 2) demo.set_step(2, step, true);
@@ -422,9 +428,16 @@ void Engine::new_project() {
     demo.set_note(4, bass_steps[i], bass_notes[i]);
   }
   project.patterns.push_back(demo);
-  project.patterns.emplace_back(5, kDefaultSteps, "Pattern 2");
-  project.patterns.emplace_back(5, kDefaultSteps, "Pattern 3");
-  project.patterns.emplace_back(5, kDefaultSteps, "Pattern 4");
+  for (int pattern_index = 2; pattern_index <= 4; ++pattern_index) {
+    Pattern pattern(5, kDefaultSteps, "Pattern " + std::to_string(pattern_index));
+    for (int channel = 0; channel < pattern.channel_count(); ++channel) {
+      for (int step = 0; step < pattern.step_count(); ++step) {
+        pattern.set_note(channel, step,
+                         project.channels[static_cast<std::size_t>(channel)].base_note_);
+      }
+    }
+    project.patterns.push_back(std::move(pattern));
+  }
   project.song = Song(5, kDefaultSongSlots);
   for (int channel = 0; channel < 5; ++channel) {
     for (int slot = 0; slot < 4; ++slot) project.song.set_pattern_at(channel, slot, 0);
@@ -552,7 +565,7 @@ bool Engine::save_project(const std::string& filename) const {
     }
     json root;
     root["format"] = "ConsoleSeq";
-    root["version"] = 4;
+    root["version"] = 5;
     root["bpm"] = state.bpm;
     root["loop"] = state.loop;
     root["song_mode"] = state.song_mode;
@@ -616,6 +629,7 @@ bool Engine::load_project(const std::string& filename) {
     if (root.value("format", std::string()) != "ConsoleSeq") {
       throw std::runtime_error("not a ConsoleSeq project");
     }
+    const int project_version = root.value("version", 1);
     const auto& channels_json = root.at("channels");
     if (!channels_json.is_array() || channels_json.empty()) {
       throw std::runtime_error("project has no channels");
@@ -681,6 +695,34 @@ bool Engine::load_project(const std::string& filename) {
         }
       }
       loaded.patterns.push_back(std::move(pattern));
+    }
+
+    // Project formats before v5 stored MIDI note 60 in the Pattern constructor
+    // even for drum channels whose actual root was different. Pitch was ignored
+    // for samples at the time, so those values were harmless. Now that one-shots
+    // can be transposed, migrate only rows whose dominant default is clearly 60.
+    // Dynamically-added sample channels already used their own base note and are
+    // intentionally left untouched.
+    if (project_version < 5) {
+      for (std::size_t channel = 0; channel < loaded.channels.size(); ++channel) {
+        const auto& instrument = loaded.channels[channel];
+        if (instrument.type_ != ChannelType::Drum || instrument.base_note_ == 60) continue;
+        std::size_t middle_c_count = 0;
+        std::size_t root_count = 0;
+        for (const auto& pattern : loaded.patterns) {
+          for (const auto& step : pattern.grid_[channel]) {
+            if (step.note == 60) ++middle_c_count;
+            if (step.note == instrument.base_note_) ++root_count;
+          }
+        }
+        if (middle_c_count <= root_count) continue;
+        const int offset = instrument.base_note_ - 60;
+        for (auto& pattern : loaded.patterns) {
+          for (auto& step : pattern.grid_[channel]) {
+            step.note = clamp_note(step.note + offset);
+          }
+        }
+      }
     }
     loaded.current_pattern = std::max(
         0, std::min(static_cast<int>(loaded.patterns.size()) - 1,
@@ -802,6 +844,13 @@ int Engine::add_pattern(const std::string& name) {
   const int steps = editable_.patterns.empty() ? kDefaultSteps : editable_.patterns.front().step_count();
   editable_.patterns.emplace_back(static_cast<int>(editable_.channels.size()), steps,
                                   name.empty() ? "Pattern " + std::to_string(index + 1) : name);
+  auto& added = editable_.patterns.back();
+  for (int channel = 0; channel < added.channel_count(); ++channel) {
+    for (int step = 0; step < added.step_count(); ++step) {
+      added.set_note(channel, step,
+                     editable_.channels[static_cast<std::size_t>(channel)].base_note_);
+    }
+  }
   publish_locked(); return index;
 }
 
@@ -817,6 +866,13 @@ int Engine::add_pattern_bank(int count) {
     const int index = first + offset;
     editable_.patterns.emplace_back(static_cast<int>(editable_.channels.size()), steps,
                                     "Pattern " + std::to_string(index + 1));
+    auto& added = editable_.patterns.back();
+    for (int channel = 0; channel < added.channel_count(); ++channel) {
+      for (int step = 0; step < added.step_count(); ++step) {
+        added.set_note(channel, step,
+                       editable_.channels[static_cast<std::size_t>(channel)].base_note_);
+      }
+    }
   }
   publish_locked();
   return first;
@@ -1277,6 +1333,9 @@ void Engine::trigger_voice(RuntimeChannel& runtime, const Channel& channel, cons
   *voice = Voice{};
   voice->active = true; voice->velocity = step.velocity; voice->note = step.note;
   voice->sample = channel.sample_;
+  if (channel.type_ == ChannelType::Drum) {
+    voice->sample_increment = std::pow(2.0, (step.note - channel.base_note_) / 12.0);
+  }
   if (step.duration_steps > 0) voice->gate_at = step.duration_steps * seconds_per_step;
   if (channel.type_ == ChannelType::Piano) voice->release_at = 0.42;
   else if (channel.type_ == ChannelType::Bass) voice->release_at = 0.24;
@@ -1349,7 +1408,11 @@ float Engine::render_voice(Voice& voice, const Channel& channel) {
   float value = 0.0F;
   if (channel.type_ == ChannelType::Drum) {
     if (!voice.sample || voice.sample_position >= voice.sample->size()) { voice.active = false; return 0.0F; }
-    value = (*voice.sample)[voice.sample_position++];
+    const auto current = static_cast<std::size_t>(voice.sample_position);
+    const auto next = std::min(current + 1, voice.sample->size() - 1);
+    const float fraction = static_cast<float>(voice.sample_position - static_cast<double>(current));
+    value = (*voice.sample)[current] * (1.0F - fraction) + (*voice.sample)[next] * fraction;
+    voice.sample_position += voice.sample_increment;
   } else {
     const double frequency = midi_frequency(voice.note);
     voice.phase += frequency / kSampleRate;

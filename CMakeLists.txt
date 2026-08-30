@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.18)
 
-project(ConsoleSeq VERSION 1.3.1 LANGUAGES CXX)
+project(ConsoleSeq VERSION 1.3.2 LANGUAGES CXX)
 
 option(CONSOLESEQ_WITH_AUDIO "Build RtAudio real-time output" ON)
 option(CONSOLESEQ_WITH_SNDFILE "Build libsndfile sample loading" ON)

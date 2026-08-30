@@ -34,6 +34,7 @@ class ConsoleSeqUI:
         soundfont = default_soundfont()
         self.soundfont_ready = soundfont.is_file() and self.engine.set_soundfont(str(soundfont))
         self.colors_enabled = False
+        self.active_popup: tuple[int, int, int, int] | None = None
         self.focus_index = 0
         self.channel = 0
         self.step = 0
@@ -95,6 +96,7 @@ class ConsoleSeqUI:
             # A neutral, high-contrast cursor is intentionally independent of
             # channel color so it remains visible on X, =, and empty cells.
             curses.init_pair(13, curses.COLOR_BLACK, curses.COLOR_WHITE)
+            curses.init_pair(14, curses.COLOR_WHITE, curses.COLOR_BLUE)
 
     @staticmethod
     def channel_color(channel: int) -> int:
@@ -129,14 +131,26 @@ class ConsoleSeqUI:
         limit = screen_width - x - (1 if y == height - 1 else 0)
         if width is not None:
             limit = min(limit, width)
+        if self.active_popup is not None:
+            popup_y, popup_x, popup_height, popup_width = self.active_popup
+            if popup_y <= y < popup_y + popup_height and popup_x <= x < popup_x + popup_width:
+                style = attr & ~curses.A_COLOR
+                popup_background = curses.color_pair(14) if self.colors_enabled else curses.A_REVERSE
+                attr = style | popup_background
         try:
             self.screen.addstr(y, x, clipped(text, limit), attr)
         except curses.error:
             pass
 
-    def box(self, y: int, x: int, height: int, width: int, title: str, focused: bool = False) -> None:
+    def box(self, y: int, x: int, height: int, width: int, title: str,
+            focused: bool = False, popup: bool = False) -> None:
         if height < 2 or width < 3:
             return
+        if popup:
+            self.active_popup = (y, x, height, width)
+            fill = curses.color_pair(14) if self.colors_enabled else curses.A_REVERSE
+            for row in range(height):
+                self.put(y + row, x, " " * width, fill, width)
         attr = curses.color_pair(2) | (curses.A_BOLD if focused else 0)
         self.put(y, x, "+" + "-" * (width - 2) + "+", attr, width)
         for row in range(1, height - 1):
@@ -146,6 +160,7 @@ class ConsoleSeqUI:
         self.put(y, x + 2, f" {title} ", attr | curses.A_BOLD, max(0, width - 4))
 
     def draw(self) -> None:
+        self.active_popup = None
         self.screen.erase()
         height, width = self.screen.getmaxyx()
         playback = "PLAY" if self.engine.is_playing() else "STOP"
@@ -206,7 +221,7 @@ class ConsoleSeqUI:
         for offset in range(visible_steps):
             step = step_start + offset
             self.put(y + 1, grid_x + offset * cell_width, str((step + 1) % 10), curses.A_DIM)
-        rows = min(self.engine.channel_count(), max(0, height - 3))
+        rows = min(self.engine.channel_count(), max(0, height - 4))
         channel_start = min(max(0, self.channel - rows + 1), max(0, self.engine.channel_count() - rows))
         for channel_index in range(channel_start, channel_start + rows):
             channel = self.engine.get_channel(channel_index)
@@ -226,16 +241,21 @@ class ConsoleSeqUI:
                     attr = self.pattern_cursor_attr()
                 self.put(row_y, grid_x + offset * cell_width, marker.center(cell_width - 1), attr, cell_width - 1)
         selected = self.engine.get_channel(self.channel)
-        if selected.type != ChannelType.DRUM and height >= 9:
+        if height >= 9:
             owner = self.note_start_at(self.engine.current_pattern(), self.channel, self.step)
             note_step = owner if owner is not None else self.step
             note = self.engine.get_note(self.engine.current_pattern(), self.channel, note_step)
             duration = self.engine.get_duration(self.engine.current_pattern(), self.channel,
                                                 note_step)
             gate = "one-shot" if duration == 0 else f"gate {duration} step(s)"
-            self.put(y + height - 2, x + 2,
-                     f"Note {note_name(note)} ({note}) vel {self.engine.get_velocity(self.engine.current_pattern(), self.channel, self.step):.2f} {gate}",
-                     curses.color_pair(4), width - 4)
+            velocity = self.engine.get_velocity(self.engine.current_pattern(), self.channel, note_step)
+            if selected.type == ChannelType.DRUM:
+                semitones = note - selected.base_note
+                pitch = f"{semitones:+d} st" if semitones else "original"
+                info = f"Sample pitch {note_name(note)} ({pitch}) vel {velocity:.2f} {gate}  [/] semitone {{/}} octave"
+            else:
+                info = f"Note {note_name(note)} ({note}) vel {velocity:.2f} {gate}"
+            self.put(y + height - 2, x + 2, info, curses.color_pair(4), width - 4)
 
     def draw_channels(self, y: int, x: int, height: int, width: int) -> None:
         self.box(y, x, height, width, "CHANNELS")
@@ -459,17 +479,28 @@ class ConsoleSeqUI:
                 self.engine.set_duration(pattern, self.channel, target, 0)
             elif key in (ord("["), ord("]")):
                 direction = -1 if key == ord("[") else 1
-                note = self.engine.get_note(self.engine.current_pattern(), self.channel, self.step)
-                self.engine.set_note(self.engine.current_pattern(), self.channel, self.step, note + direction)
+                pattern = self.engine.current_pattern()
+                target = self.note_start_at(pattern, self.channel, self.step)
+                target = self.step if target is None else target
+                note = self.engine.get_note(pattern, self.channel, target)
+                self.engine.set_note(pattern, self.channel, target, note + direction)
+                self.status = f"Step pitch: {note_name(self.engine.get_note(pattern, self.channel, target))}"
             elif key in (ord("{"), ord("}")):
                 direction = -12 if key == ord("{") else 12
-                note = self.engine.get_note(self.engine.current_pattern(), self.channel, self.step)
-                self.engine.set_note(self.engine.current_pattern(), self.channel, self.step, note + direction)
+                pattern = self.engine.current_pattern()
+                target = self.note_start_at(pattern, self.channel, self.step)
+                target = self.step if target is None else target
+                note = self.engine.get_note(pattern, self.channel, target)
+                self.engine.set_note(pattern, self.channel, target, note + direction)
+                self.status = f"Step pitch: {note_name(self.engine.get_note(pattern, self.channel, target))}"
             elif key in (ord(";"), ord("'")):
                 direction = -0.05 if key == ord(";") else 0.05
-                velocity = self.engine.get_velocity(self.engine.current_pattern(), self.channel, self.step)
-                self.engine.set_velocity(self.engine.current_pattern(), self.channel, self.step, velocity + direction)
-                self.status = f"Step velocity: {self.engine.get_velocity(self.engine.current_pattern(), self.channel, self.step):.2f}"
+                pattern = self.engine.current_pattern()
+                target = self.note_start_at(pattern, self.channel, self.step)
+                target = self.step if target is None else target
+                velocity = self.engine.get_velocity(pattern, self.channel, target)
+                self.engine.set_velocity(pattern, self.channel, target, velocity + direction)
+                self.status = f"Step velocity: {self.engine.get_velocity(pattern, self.channel, target):.2f}"
             elif key in (ord("g"), ord("G")):
                 value = self.prompt("GO TO PATTERN NUMBER", str(self.engine.current_pattern() + 1))
                 try:
@@ -568,7 +599,7 @@ class ConsoleSeqUI:
         self.screen.timeout(-1)
         try:
             while True:
-                self.box(popup_y, popup_x, 5, popup_width, title, True)
+                self.box(popup_y, popup_x, 5, popup_width, title, True, popup=True)
                 start = max(0, cursor - field_width + 1)
                 visible = "".join(value[start:start + field_width])
                 self.put(popup_y + 2, popup_x + 2, " " * field_width, curses.A_REVERSE, field_width)
@@ -627,7 +658,7 @@ class ConsoleSeqUI:
         height, width = self.screen.getmaxyx()
         popup_width = min(max(40, len(question) + 8), width - 4)
         y, x = max(1, height // 2 - 2), max(1, (width - popup_width) // 2)
-        self.box(y, x, 5, popup_width, "CONFIRM", True)
+        self.box(y, x, 5, popup_width, "CONFIRM", True, popup=True)
         self.put(y + 2, x + 3, question + " [y/N]", curses.A_BOLD, popup_width - 6)
         self.screen.refresh()
         self.screen.timeout(-1)
@@ -645,7 +676,7 @@ class ConsoleSeqUI:
         attack, decay, sustain, release = channel.adsr
         kind = ("DRUM" if channel.type == ChannelType.DRUM else
                 "SOUNDFONT" if channel.type == ChannelType.SOUNDFONT else "SYNTH")
-        self.box(y, x, popup_height, popup_width, f"{channel.name.upper()} SETTINGS", True)
+        self.box(y, x, popup_height, popup_width, f"{channel.name.upper()} SETTINGS", True, popup=True)
         common = (
             f"P  Choose preset: {channel.builtin_id or 'custom WAV'}",
             "H  Rename channel     C  Clone channel     X  Delete channel",
@@ -753,7 +784,7 @@ class ConsoleSeqUI:
         self.screen.timeout(-1)
         try:
             while True:
-                self.box(y, x, popup_height, popup_width, title, True)
+                self.box(y, x, popup_height, popup_width, title, True, popup=True)
                 category = categories[category_index]
                 choices = [item for item in catalog if item[2] == category]
                 selected = selected_by_category[category]
@@ -771,7 +802,7 @@ class ConsoleSeqUI:
                         continue
                     preset_id, label, _ = choices[index]
                     marker = ">" if index == selected else " "
-                    attr = curses.color_pair(1) | curses.A_BOLD if index == selected else 0
+                    attr = curses.A_REVERSE | curses.A_BOLD if index == selected else 0
                     self.put(y + 2 + row, x + 2,
                              f"{marker} {label:<26} {preset_id}", attr, popup_width - 4)
                 self.put(y + popup_height - 2, x + 2,
@@ -860,7 +891,7 @@ class ConsoleSeqUI:
         height, width = self.screen.getmaxyx()
         popup_width = min(48, width - 4)
         y, x = max(1, height // 2 - 7), max(1, (width - popup_width) // 2)
-        self.box(y, x, 14, popup_width, "MAIN MENU", True)
+        self.box(y, x, 14, popup_width, "MAIN MENU", True, popup=True)
         options: Iterable[str] = (
             "N  New project", "O  Open project", "S  Save project",
             "I  Add instrument/channel", "E  Selected channel settings",

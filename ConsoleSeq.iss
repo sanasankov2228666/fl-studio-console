@@ -1,5 +1,5 @@
 #define MyAppName "ConsoleSeq"
-#define MyAppVersion "1.3.1"
+#define MyAppVersion "1.3.2"
 #define MyAppPublisher "ConsoleSeq Project"
 #define MyAppExeName "ConsoleSeq.exe"
 

@@ -240,7 +240,8 @@ class Engine {
   struct Voice {
     bool active{false};
     std::shared_ptr<const std::vector<float>> sample;
-    std::size_t sample_position{0};
+    double sample_position{0.0};
+    double sample_increment{1.0};
     double phase{0.0};
     double age{0.0};
     double release_at{0.0};
