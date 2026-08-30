@@ -1,0 +1,3 @@
+# curses is in the Python standard library on Unix.
+# setup.ps1 installs this conditionally on Windows.
+windows-curses>=2.4.1; platform_system == "Windows"

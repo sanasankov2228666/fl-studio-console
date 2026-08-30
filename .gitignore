@@ -1,0 +1,14 @@
+/.tools/
+/.venv/
+/.venv-win/
+/.venv-unix/
+/build/
+/build-win/
+/build-unix/
+*.pyd
+*.so
+*.dylib
+*.pyc
+__pycache__/
+*.cseq
+*.zip
