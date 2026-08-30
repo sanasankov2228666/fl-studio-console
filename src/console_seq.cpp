@@ -27,6 +27,10 @@
 #include <sndfile.h>
 #endif
 
+#ifdef CONSOLESEQ_WITH_FLUIDSYNTH
+#include <fluidsynth.h>
+#endif
+
 namespace consoleseq {
 namespace {
 
@@ -45,6 +49,7 @@ const char* channel_type_name(ChannelType type) {
     case ChannelType::Piano: return "piano";
     case ChannelType::Bass: return "bass";
     case ChannelType::Synth: return "synth";
+    case ChannelType::SoundFont: return "soundfont";
   }
   return "synth";
 }
@@ -53,6 +58,7 @@ ChannelType channel_type_from_name(const std::string& value) {
   if (value == "drum") return ChannelType::Drum;
   if (value == "piano") return ChannelType::Piano;
   if (value == "bass") return ChannelType::Bass;
+  if (value == "soundfont") return ChannelType::SoundFont;
   return ChannelType::Synth;
 }
 
@@ -74,7 +80,8 @@ Oscillator oscillator_from_name(const std::string& value) {
 }
 
 json step_to_json(const Step& step) {
-  return json{{"active", step.active}, {"note", step.note}, {"velocity", step.velocity}};
+  return json{{"active", step.active}, {"note", step.note}, {"velocity", step.velocity},
+              {"duration", step.duration_steps}};
 }
 
 Step step_from_json(const json& value, int fallback_note) {
@@ -82,6 +89,7 @@ Step step_from_json(const json& value, int fallback_note) {
   step.active = value.value("active", false);
   step.note = clamp_note(value.value("note", fallback_note));
   step.velocity = clampf(value.value("velocity", 1.0F), 0.0F, 1.0F);
+  step.duration_steps = std::max(0, std::min(64, value.value("duration", 0)));
   return step;
 }
 
@@ -181,6 +189,14 @@ void Pattern::set_velocity(int channel, int step, float velocity) {
 
 float Pattern::get_velocity(int channel, int step) const { return at(channel, step).velocity; }
 
+void Pattern::set_duration(int channel, int step, int duration_steps) {
+  check_index(channel, step);
+  grid_[static_cast<std::size_t>(channel)][static_cast<std::size_t>(step)].duration_steps =
+      std::max(0, std::min(steps_ - step, duration_steps));
+}
+
+int Pattern::get_duration(int channel, int step) const { return at(channel, step).duration_steps; }
+
 void Pattern::clear() {
   for (auto& row : grid_) {
     for (auto& step : row) step.active = false;
@@ -243,6 +259,8 @@ float Channel::drive() const { return drive_; }
 void Channel::set_drive(float value) { drive_ = clampf(value, 0.0F, 1.0F); }
 const std::string& Channel::sample_path() const { return sample_path_; }
 const std::string& Channel::builtin_id() const { return builtin_id_; }
+int Channel::soundfont_bank() const { return soundfont_bank_; }
+int Channel::soundfont_program() const { return soundfont_program_; }
 
 bool Channel::set_sample(const std::string& filename) {
   std::ifstream stream(std::filesystem::u8path(filename), std::ios::binary);
@@ -314,8 +332,28 @@ int Song::slot_count() const {
   return arrangement_.empty() ? 0 : static_cast<int>(arrangement_.front().size());
 }
 
+struct Engine::FluidSynthState {
+#ifdef CONSOLESEQ_WITH_FLUIDSYNTH
+  fluid_settings_t* settings{nullptr};
+  fluid_synth_t* synth{nullptr};
+  int soundfont_id{-1};
+#endif
+  std::string path;
+  std::string status{"FluidSynth SoundFont is not loaded"};
+  std::vector<int> active_notes;
+  std::vector<int> remaining_steps;
+
+  ~FluidSynthState() {
+#ifdef CONSOLESEQ_WITH_FLUIDSYNTH
+    if (synth) delete_fluid_synth(synth);
+    if (settings) delete_fluid_settings(settings);
+#endif
+  }
+};
+
 Engine::Engine() {
   runtime_.reserve(32);
+  fluidsynth_ = std::make_unique<FluidSynthState>();
   new_project();
 }
 Engine::~Engine() { shutdown(); }
@@ -331,6 +369,8 @@ Channel Engine::make_preset_channel(const std::string& preset_id) {
   channel.volume_ = preset->volume;
   channel.tone_ = preset->tone;
   channel.drive_ = preset->drive;
+  channel.soundfont_bank_ = preset->soundfont_bank;
+  channel.soundfont_program_ = preset->soundfont_program;
   if (preset->type == ChannelType::Drum) channel.sample_ = generate_builtin(preset->id);
   return channel;
 }
@@ -512,7 +552,7 @@ bool Engine::save_project(const std::string& filename) const {
     }
     json root;
     root["format"] = "ConsoleSeq";
-    root["version"] = 3;
+    root["version"] = 4;
     root["bpm"] = state.bpm;
     root["loop"] = state.loop;
     root["song_mode"] = state.song_mode;
@@ -526,7 +566,9 @@ bool Engine::save_project(const std::string& filename) const {
           {"oscillator", oscillator_name(channel.oscillator_)},
           {"adsr", {channel.attack_, channel.decay_, channel.sustain_, channel.release_}},
           {"tone", channel.tone_}, {"drive", channel.drive_},
-          {"sample_path", channel.sample_path_}, {"builtin", channel.builtin_id_}});
+          {"sample_path", channel.sample_path_}, {"builtin", channel.builtin_id_},
+          {"soundfont_bank", channel.soundfont_bank_},
+          {"soundfont_program", channel.soundfont_program_}});
     }
     root["patterns"] = json::array();
     for (const auto& pattern : state.patterns) {
@@ -600,8 +642,18 @@ bool Engine::load_project(const std::string& filename) {
       channel.set_tone(item.value("tone", 0.75F));
       channel.set_drive(item.value("drive", 0.0F));
       channel.builtin_id_ = item.value("builtin", "");
+      channel.soundfont_bank_ = item.value("soundfont_bank", -1);
+      channel.soundfont_program_ = item.value("soundfont_program", -1);
+      if (const auto* preset = find_instrument_preset(channel.builtin_id_)) {
+        if (channel.type_ == ChannelType::SoundFont) {
+          channel.soundfont_bank_ = item.value("soundfont_bank", preset->soundfont_bank);
+          channel.soundfont_program_ = item.value("soundfont_program", preset->soundfont_program);
+        }
+      }
       channel.sample_path_ = item.value("sample_path", "");
-      if (!channel.sample_path_.empty()) channel.sample_ = load_audio_file(channel.sample_path_);
+      if (!channel.sample_path_.empty()) {
+        channel.sample_ = load_audio_file(resolve_audio_reference(channel.sample_path_));
+      }
       if (!channel.sample_) channel.sample_ = generate_builtin(channel.builtin_id_);
       loaded.channels.push_back(std::move(channel));
     }
@@ -737,6 +789,8 @@ int Engine::get_note(int pattern, int channel, int step) const { std::lock_guard
 void Engine::set_note(int pattern, int channel, int step, int note) { std::lock_guard<std::mutex> lock(state_mutex_); editable_.patterns.at(static_cast<std::size_t>(pattern)).set_note(channel, step, note); publish_locked(); }
 float Engine::get_velocity(int pattern, int channel, int step) const { std::lock_guard<std::mutex> lock(state_mutex_); return editable_.patterns.at(static_cast<std::size_t>(pattern)).get_velocity(channel, step); }
 void Engine::set_velocity(int pattern, int channel, int step, float velocity) { std::lock_guard<std::mutex> lock(state_mutex_); editable_.patterns.at(static_cast<std::size_t>(pattern)).set_velocity(channel, step, velocity); publish_locked(); }
+int Engine::get_duration(int pattern, int channel, int step) const { std::lock_guard<std::mutex> lock(state_mutex_); return editable_.patterns.at(static_cast<std::size_t>(pattern)).get_duration(channel, step); }
+void Engine::set_duration(int pattern, int channel, int step, int duration_steps) { std::lock_guard<std::mutex> lock(state_mutex_); editable_.patterns.at(static_cast<std::size_t>(pattern)).set_duration(channel, step, duration_steps); publish_locked(); }
 void Engine::clear_pattern(int pattern) { std::lock_guard<std::mutex> lock(state_mutex_); editable_.patterns.at(static_cast<std::size_t>(pattern)).clear(); publish_locked(); }
 
 int Engine::add_pattern(const std::string& name) {
@@ -902,7 +956,8 @@ void Engine::set_channel_solo(int channel, bool value) { std::lock_guard<std::mu
 void Engine::set_channel_base_note(int channel, int value) { std::lock_guard<std::mutex> lock(state_mutex_); editable_.channels.at(static_cast<std::size_t>(channel)).set_base_note(value); publish_locked(); }
 
 bool Engine::set_channel_sample(int channel, const std::string& filename) {
-  auto sample = load_audio_file(filename);
+  const auto resolved = resolve_audio_reference(filename);
+  auto sample = load_audio_file(resolved);
   if (!sample || sample->empty()) {
     std::lock_guard<std::mutex> lock(state_mutex_);
     last_error_ = "Could not decode WAV/MP3 file; the built-in sound was kept";
@@ -914,8 +969,92 @@ bool Engine::set_channel_sample(int channel, const std::string& filename) {
       find_instrument_preset(target.builtin_id_)->type != ChannelType::Drum) {
     target.builtin_id_ = "perc_click";
   }
-  target.sample_path_ = filename; target.sample_ = std::move(sample); target.type_ = ChannelType::Drum;
+  target.sample_path_ = portable_audio_reference(resolved);
+  target.sample_ = std::move(sample); target.type_ = ChannelType::Drum;
+  target.soundfont_bank_ = -1; target.soundfont_program_ = -1;
   last_error_.clear(); publish_locked(); return true;
+}
+
+void Engine::set_asset_root(const std::string& directory) {
+  asset_root_ = directory.empty() ? std::filesystem::path{} : std::filesystem::u8path(directory);
+}
+
+std::string Engine::resolve_audio_reference(const std::string& reference) const {
+  constexpr const char* prefix = "asset://";
+  if (reference.rfind(prefix, 0) != 0) return reference;
+  if (asset_root_.empty()) return reference;
+  const auto relative = std::filesystem::u8path(reference.substr(std::char_traits<char>::length(prefix)));
+  if (relative.is_absolute()) return reference;
+  for (const auto& part : relative) {
+    if (part == "..") return reference;
+  }
+  return (asset_root_ / relative).u8string();
+}
+
+std::string Engine::portable_audio_reference(const std::string& filename) const {
+  if (asset_root_.empty()) return filename;
+  std::error_code error;
+  const auto absolute_file = std::filesystem::weakly_canonical(std::filesystem::u8path(filename), error);
+  if (error) return filename;
+  const auto absolute_root = std::filesystem::weakly_canonical(asset_root_, error);
+  if (error) return filename;
+  auto relative = std::filesystem::relative(absolute_file, absolute_root, error);
+  if (error || relative.empty()) return filename;
+  for (const auto& part : relative) {
+    if (part == "..") return filename;
+  }
+  return "asset://" + relative.generic_u8string();
+}
+
+bool Engine::set_soundfont(const std::string& filename) {
+#ifdef CONSOLESEQ_WITH_FLUIDSYNTH
+  try {
+    if (filename.empty() || !std::filesystem::exists(std::filesystem::u8path(filename))) {
+      throw std::runtime_error("SoundFont file does not exist: " + filename);
+    }
+    auto next = std::make_unique<FluidSynthState>();
+    next->settings = new_fluid_settings();
+    if (!next->settings) throw std::runtime_error("FluidSynth settings allocation failed");
+    fluid_settings_setnum(next->settings, "synth.sample-rate", static_cast<double>(kSampleRate));
+    fluid_settings_setint(next->settings, "synth.midi-channels", 64);
+    fluid_settings_setint(next->settings, "synth.polyphony", 256);
+    fluid_settings_setnum(next->settings, "synth.gain", 0.55);
+    fluid_settings_setint(next->settings, "synth.reverb.active", 1);
+    fluid_settings_setint(next->settings, "synth.chorus.active", 1);
+    next->synth = new_fluid_synth(next->settings);
+    if (!next->synth) throw std::runtime_error("FluidSynth synthesizer allocation failed");
+    next->soundfont_id = fluid_synth_sfload(next->synth, filename.c_str(), 1);
+    if (next->soundfont_id < 0) throw std::runtime_error("FluidSynth could not load the SF2/SF3 file");
+    next->path = filename;
+    next->status = "FluidSynth ready: " + filename;
+    next->active_notes.assign(kMaxChannels, -1);
+    next->remaining_steps.assign(kMaxChannels, 0);
+    stop();
+    fluidsynth_ = std::move(next);
+    return true;
+  } catch (const std::exception& error) {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    last_error_ = error.what();
+    return false;
+  }
+#else
+  (void)filename;
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  last_error_ = "ConsoleSeq was built without FluidSynth support";
+  return false;
+#endif
+}
+
+bool Engine::soundfont_available() const {
+#ifdef CONSOLESEQ_WITH_FLUIDSYNTH
+  return fluidsynth_ && fluidsynth_->synth && fluidsynth_->soundfont_id >= 0;
+#else
+  return false;
+#endif
+}
+
+std::string Engine::soundfont_status() const {
+  return fluidsynth_ ? fluidsynth_->status : "FluidSynth is unavailable";
 }
 
 void Engine::set_synth_param(int channel, const std::string& parameter, float value) {
@@ -1114,6 +1253,13 @@ void Engine::reset_runtime_if_needed(const std::shared_ptr<const ProjectState>& 
   if (runtime_state_revision_ != state->revision || runtime_transport_revision_ != transport) {
     runtime_.resize(state->channels.size());
     for (auto& channel : runtime_) channel = RuntimeChannel{};
+#ifdef CONSOLESEQ_WITH_FLUIDSYNTH
+    if (soundfont_available()) {
+      fluid_synth_system_reset(fluidsynth_->synth);
+      fluidsynth_->active_notes.assign(kMaxChannels, -1);
+      fluidsynth_->remaining_steps.assign(kMaxChannels, 0);
+    }
+#endif
     runtime_state_revision_ = state->revision;
     if (runtime_transport_revision_ != transport) {
       global_step_ = 0; step_phase_ = 0.0; runtime_transport_revision_ = transport;
@@ -1121,7 +1267,8 @@ void Engine::reset_runtime_if_needed(const std::shared_ptr<const ProjectState>& 
   }
 }
 
-void Engine::trigger_voice(RuntimeChannel& runtime, const Channel& channel, const Step& step) {
+void Engine::trigger_voice(RuntimeChannel& runtime, const Channel& channel, const Step& step,
+                           double seconds_per_step) {
   Voice* voice = &runtime.voices.front();
   for (auto& candidate : runtime.voices) {
     if (!candidate.active) { voice = &candidate; break; }
@@ -1130,6 +1277,7 @@ void Engine::trigger_voice(RuntimeChannel& runtime, const Channel& channel, cons
   *voice = Voice{};
   voice->active = true; voice->velocity = step.velocity; voice->note = step.note;
   voice->sample = channel.sample_;
+  if (step.duration_steps > 0) voice->gate_at = step.duration_steps * seconds_per_step;
   if (channel.type_ == ChannelType::Piano) voice->release_at = 0.42;
   else if (channel.type_ == ChannelType::Bass) voice->release_at = 0.24;
   else voice->release_at = std::max(0.28, static_cast<double>(channel.attack_ + channel.decay_ + .12F));
@@ -1142,17 +1290,62 @@ void Engine::trigger_step(const std::shared_ptr<const ProjectState>& state, int 
   const int slot = (global_step / steps) % std::max(1, state->song.slot_count());
   current_step_atomic_.store(local_step); current_song_slot_atomic_.store(slot);
   for (std::size_t channel_index = 0; channel_index < state->channels.size(); ++channel_index) {
+#ifdef CONSOLESEQ_WITH_FLUIDSYNTH
+    if (soundfont_available() &&
+        fluidsynth_->active_notes[channel_index] >= 0) {
+      --fluidsynth_->remaining_steps[channel_index];
+      if (fluidsynth_->remaining_steps[channel_index] <= 0) {
+        fluid_synth_noteoff(fluidsynth_->synth, static_cast<int>(channel_index),
+                            fluidsynth_->active_notes[channel_index]);
+        fluidsynth_->active_notes[channel_index] = -1;
+      }
+    }
+#endif
     int pattern_id = state->current_pattern;
     if (state->song_mode) pattern_id = state->song.get_pattern_at(static_cast<int>(channel_index), slot);
     if (pattern_id < 0 || pattern_id >= static_cast<int>(state->patterns.size())) continue;
     const auto& pattern = state->patterns[static_cast<std::size_t>(pattern_id)];
     const Step& step = pattern.at(static_cast<int>(channel_index), local_step % pattern.step_count());
-    if (step.active) trigger_voice(runtime_[channel_index], state->channels[channel_index], step);
+    if (step.active) {
+      const double seconds_per_step = 60.0 / std::max(40.0F, state->bpm) / 4.0;
+      const auto& channel = state->channels[channel_index];
+      const bool any_solo = std::any_of(state->channels.begin(), state->channels.end(),
+          [](const Channel& candidate) { return candidate.solo_; });
+      const bool audible = !channel.mute_ && (!any_solo || channel.solo_);
+      if (channel.type_ == ChannelType::SoundFont) {
+#ifdef CONSOLESEQ_WITH_FLUIDSYNTH
+        if (audible && soundfont_available()) {
+          const int midi_channel = static_cast<int>(channel_index);
+          if (fluidsynth_->active_notes[channel_index] >= 0) {
+            fluid_synth_noteoff(fluidsynth_->synth, midi_channel,
+                                fluidsynth_->active_notes[channel_index]);
+          }
+          fluid_synth_program_select(fluidsynth_->synth, midi_channel,
+                                     fluidsynth_->soundfont_id,
+                                     channel.soundfont_bank_, channel.soundfont_program_);
+          fluid_synth_cc(fluidsynth_->synth, midi_channel, 7,
+                         static_cast<int>(std::round(channel.volume_ * 127.0F)));
+          fluid_synth_cc(fluidsynth_->synth, midi_channel, 10,
+                         static_cast<int>(std::round((channel.pan_ + 1.0F) * 63.5F)));
+          fluid_synth_noteon(fluidsynth_->synth, midi_channel, step.note,
+                             static_cast<int>(std::round(step.velocity * 127.0F)));
+          fluidsynth_->active_notes[channel_index] = step.note;
+          fluidsynth_->remaining_steps[channel_index] = std::max(1, step.duration_steps);
+        }
+#endif
+      } else {
+        trigger_voice(runtime_[channel_index], channel, step, seconds_per_step);
+      }
+    }
   }
 }
 
 float Engine::render_voice(Voice& voice, const Channel& channel) {
   if (!voice.active) return 0.0F;
+  if (voice.gate_at >= 0.0 && voice.age >= voice.gate_at) {
+    voice.active = false;
+    return 0.0F;
+  }
   float value = 0.0F;
   if (channel.type_ == ChannelType::Drum) {
     if (!voice.sample || voice.sample_position >= voice.sample->size()) { voice.active = false; return 0.0F; }
@@ -1261,6 +1454,7 @@ void Engine::render(float* output, unsigned int frames) {
     float left = 0.0F, right = 0.0F;
     for (std::size_t index = 0; index < state->channels.size(); ++index) {
       const auto& channel = state->channels[index];
+      if (channel.type_ == ChannelType::SoundFont) continue;
       const bool audible = !channel.mute_ && (!any_solo || channel.solo_);
       float mono = 0.0F;
       for (auto& voice : runtime_[index].voices) mono += render_voice(voice, channel);
@@ -1270,6 +1464,15 @@ void Engine::render(float* output, unsigned int frames) {
       left += mono * channel.volume_ * left_gain;
       right += mono * channel.volume_ * right_gain;
     }
+#ifdef CONSOLESEQ_WITH_FLUIDSYNTH
+    if (soundfont_available()) {
+      float fluid_left = 0.0F, fluid_right = 0.0F;
+      fluid_synth_write_float(fluidsynth_->synth, 1, &fluid_left, 0, 1,
+                              &fluid_right, 0, 1);
+      left += fluid_left;
+      right += fluid_right;
+    }
+#endif
     output[static_cast<std::size_t>(frame) * 2U] = std::tanh(left * 0.82F);
     output[static_cast<std::size_t>(frame) * 2U + 1U] = std::tanh(right * 0.82F);
   }

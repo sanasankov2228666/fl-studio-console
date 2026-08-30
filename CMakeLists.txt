@@ -1,9 +1,10 @@
 cmake_minimum_required(VERSION 3.18)
 
-project(ConsoleSeq VERSION 1.2.0 LANGUAGES CXX)
+project(ConsoleSeq VERSION 1.3.1 LANGUAGES CXX)
 
 option(CONSOLESEQ_WITH_AUDIO "Build RtAudio real-time output" ON)
 option(CONSOLESEQ_WITH_SNDFILE "Build libsndfile sample loading" ON)
+option(CONSOLESEQ_WITH_FLUIDSYNTH "Build General MIDI SoundFont instruments" ON)
 option(CONSOLESEQ_BUILD_TESTS "Build the native test executable" ON)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -33,6 +34,19 @@ FetchContent_Declare(
   DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 )
 FetchContent_MakeAvailable(dr_libs)
+
+if(CONSOLESEQ_WITH_FLUIDSYNTH)
+  find_package(FluidSynth CONFIG QUIET COMPONENTS shared)
+  if(NOT TARGET FluidSynth::libfluidsynth)
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+      pkg_check_modules(FLUIDSYNTH QUIET IMPORTED_TARGET fluidsynth)
+    endif()
+  endif()
+  if(NOT TARGET FluidSynth::libfluidsynth AND NOT TARGET PkgConfig::FLUIDSYNTH)
+    message(FATAL_ERROR "FluidSynth development files were not found. Run the supplied setup script.")
+  endif()
+endif()
 
 if(CONSOLESEQ_WITH_AUDIO)
   set(RTAUDIO_BUILD_TESTING OFF CACHE BOOL "" FORCE)
@@ -82,6 +96,15 @@ if(CONSOLESEQ_WITH_SNDFILE)
     target_link_libraries(console_seq_engine PUBLIC SndFile::sndfile)
   elseif(TARGET sndfile)
     target_link_libraries(console_seq_engine PUBLIC sndfile)
+  endif()
+endif()
+
+if(CONSOLESEQ_WITH_FLUIDSYNTH)
+  target_compile_definitions(console_seq_engine PUBLIC CONSOLESEQ_WITH_FLUIDSYNTH=1)
+  if(TARGET FluidSynth::libfluidsynth)
+    target_link_libraries(console_seq_engine PUBLIC FluidSynth::libfluidsynth)
+  else()
+    target_link_libraries(console_seq_engine PUBLIC PkgConfig::FLUIDSYNTH)
   endif()
 endif()
 

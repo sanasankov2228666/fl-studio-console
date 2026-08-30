@@ -21,6 +21,8 @@ struct PresetDefinition {
   float volume;
   float tone;
   float drive;
+  int soundfont_bank{-1};
+  int soundfont_program{-1};
 };
 
 const std::vector<PresetDefinition>& instrument_presets();

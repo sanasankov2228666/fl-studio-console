@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 from console_seq import ChannelType, Engine, Pattern, Song
 from console_seq.ui import ConsoleSeqUI
+from console_seq.assets import asset_root, default_soundfont, sample_catalog
 import curses
 
 
@@ -33,9 +34,11 @@ class ConsoleSeqCoreTests(unittest.TestCase):
         self.engine.set_step(0, 3, 3, True)
         self.engine.set_note(0, 3, 3, 65)
         self.engine.set_velocity(0, 3, 3, 0.55)
+        self.engine.set_duration(0, 3, 3, 4)
         self.assertTrue(self.engine.get_step(0, 3, 3))
         self.assertEqual(self.engine.get_note(0, 3, 3), 65)
         self.assertAlmostEqual(self.engine.get_velocity(0, 3, 3), 0.55, places=4)
+        self.assertEqual(self.engine.get_duration(0, 3, 3), 4)
 
     def test_pattern_sizes_song_and_mixer(self) -> None:
         self.engine.set_step_count(32)
@@ -82,7 +85,31 @@ class ConsoleSeqCoreTests(unittest.TestCase):
             audio = self.engine.render_offline(0.2)
             self.assertEqual(len(audio), int(44100 * 0.2) * 2)
             self.assertGreater(max(abs(value) for value in audio), 0.01)
-            self.assertLessEqual(max(abs(value) for value in audio), 1.0)
+
+    def test_gated_sample_is_cut_at_selected_step_length(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            wav_path = Path(directory) / "long.wav"
+            with wave.open(str(wav_path), "wb") as wav:
+                wav.setnchannels(1)
+                wav.setsampwidth(2)
+                wav.setframerate(44100)
+                sample = int(0.45 * 32767).to_bytes(2, "little", signed=True)
+                wav.writeframes(sample * 22050)
+            self.engine.clear_pattern(0)
+            for channel in range(self.engine.channel_count()):
+                self.engine.set_channel_mute(channel, True)
+            channel = self.engine.add_channel("perc_click")
+            self.assertTrue(self.engine.set_channel_sample(channel, str(wav_path)))
+            self.engine.set_channel_mute(channel, False)
+            self.engine.set_step(0, channel, 0, True)
+            self.engine.set_duration(0, channel, 0, 1)
+            gated = self.engine.render_offline(0.30)
+            tail_start = int(0.15 * 44100) * 2
+            self.assertLess(max(abs(value) for value in gated[tail_start:]), 0.0001)
+            self.engine.set_duration(0, channel, 0, 0)
+            one_shot = self.engine.render_offline(0.30)
+            self.assertGreater(max(abs(value) for value in one_shot[tail_start:]), 0.1)
+            self.assertLessEqual(max(abs(value) for value in one_shot), 1.0)
 
     def test_load_mp3_and_render(self) -> None:
         with tempfile.TemporaryDirectory(prefix="ConsoleSeq-mp3-") as directory:
@@ -151,12 +178,14 @@ class ConsoleSeqCoreTests(unittest.TestCase):
 
     def test_instrument_presets_and_dynamic_channels(self) -> None:
         presets = self.engine.preset_ids()
-        self.assertEqual(len(presets), 60)
+        self.assertEqual(len(presets), 100)
         catalog = self.engine.preset_catalog()
-        self.assertEqual(len(catalog), 60)
+        self.assertEqual(len(catalog), 100)
         categories = {category for _preset_id, _name, category in catalog}
-        self.assertEqual(categories, {"Pianos", "Kicks", "Basses", "Guitars", "Strings",
-                                      "Synths", "Snares", "Hi-hats", "Percussion", "FX"})
+        self.assertTrue({"Pianos", "Kicks", "Basses", "Guitars", "Strings",
+                         "Synths", "Snares", "Hi-hats", "Percussion", "FX",
+                         "Live Pianos", "Live Guitars", "Live Basses", "Live Drums",
+                         "Live Organs", "Orchestral", "Brass & Winds"}.issubset(categories))
         for required in ("piano_classic", "guitar_acoustic", "kick_trap_hard",
                          "bass_808_long", "fm_bell", "perc_newjazz", "fx_riser"):
             self.assertIn(required, presets)
@@ -184,6 +213,7 @@ class ConsoleSeqCoreTests(unittest.TestCase):
     def test_every_builtin_preset_renders_audio(self) -> None:
         for preset in self.engine.preset_ids():
             engine = Engine()
+            self.assertTrue(engine.set_soundfont(str(default_soundfont())), engine.last_error())
             engine.clear_pattern(0)
             for channel in range(engine.channel_count()):
                 engine.set_channel_mute(channel, True)
@@ -192,6 +222,41 @@ class ConsoleSeqCoreTests(unittest.TestCase):
             engine.set_channel_mute(added, False)
             peak = max(abs(value) for value in engine.render_offline(0.12))
             self.assertGreater(peak, 0.001, preset)
+
+    def test_fluidsynth_duration_and_project_round_trip(self) -> None:
+        self.assertTrue(self.engine.set_soundfont(str(default_soundfont())), self.engine.last_error())
+        channel = self.engine.add_channel("sf_grand_piano")
+        self.engine.set_step(0, channel, 0, True)
+        self.engine.set_note(0, channel, 0, 64)
+        self.engine.set_duration(0, channel, 0, 4)
+        self.assertGreater(max(abs(value) for value in self.engine.render_offline(0.6)), 0.01)
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory) / "живое пианино.cseq"
+            self.assertTrue(self.engine.save_project(str(project)), self.engine.last_error())
+            loaded = Engine()
+            loaded.set_soundfont(str(default_soundfont()))
+            self.assertTrue(loaded.load_project(str(project)), loaded.last_error())
+            self.assertEqual(loaded.get_duration(0, channel, 0), 4)
+            self.assertEqual(loaded.get_channel(channel).soundfont_program, 0)
+
+    def test_bundled_sample_catalog_and_portable_reference(self) -> None:
+        catalog = list(sample_catalog())
+        self.assertEqual(len(catalog), 167)
+        self.engine.set_asset_root(str(asset_root()))
+        preset_id, _name, category, sample = catalog[0]
+        self.assertTrue(preset_id.startswith("sample::"))
+        self.assertTrue(category.startswith("Kit:"))
+        channel = self.engine.add_channel("perc_click")
+        self.assertTrue(self.engine.set_channel_sample(channel, str(sample)), self.engine.last_error())
+        self.assertTrue(self.engine.get_channel(channel).sample_path.startswith("asset://"))
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory) / "sample-bank.cseq"
+            self.assertTrue(self.engine.save_project(str(project)), self.engine.last_error())
+            loaded = Engine()
+            loaded.set_asset_root(str(asset_root()))
+            self.assertTrue(loaded.load_project(str(project)), loaded.last_error())
+            self.assertTrue(loaded.get_channel(channel).sample_path.startswith("asset://"))
+            self.assertGreater(max(abs(value) for value in loaded.render_offline(0.2)), 0.001)
 
     def test_channel_and_pattern_changes_survive_round_trip(self) -> None:
         added = self.engine.add_channel("pad_warm")
@@ -274,12 +339,32 @@ class _FakeScreen:
     def __init__(self, height: int = 30, width: int = 120):
         self.height = height
         self.width = width
+        self.calls = []
 
     def getmaxyx(self):
         return (self.height, self.width)
 
-    def addstr(self, *_args):
+    def addstr(self, *args):
+        self.calls.append(args)
         return None
+
+
+class _InputScreen(_FakeScreen):
+    def __init__(self, keys):
+        super().__init__()
+        self.keys = iter(keys)
+
+    def move(self, *_args):
+        return None
+
+    def refresh(self):
+        return None
+
+    def timeout(self, *_args):
+        return None
+
+    def get_wch(self):
+        return next(self.keys)
 
 
 class ConsoleSeqUiLogicTests(unittest.TestCase):
@@ -325,6 +410,18 @@ class ConsoleSeqUiLogicTests(unittest.TestCase):
         self.ui.handle_key(ord("o"))
         self.assertTrue(self.ui.engine.get_channel(0).mute)
         self.assertTrue(self.ui.engine.get_channel(0).solo)
+
+    def test_pattern_cursor_uses_high_contrast_background(self) -> None:
+        self.ui.screen = _FakeScreen(height=30, width=120)
+        self.ui.colors_enabled = False
+        with patch("console_seq.ui.curses.color_pair", return_value=0):
+            self.ui.draw_pattern(3, 0, 12, 50)
+        # Pattern 1 starts with Kick X at row 5, column 16. The selected
+        # cell must use reverse video even when the terminal has no colors.
+        cursor_calls = [call for call in self.ui.screen.calls
+                        if len(call) >= 4 and call[0] == 5 and call[1] == 16]
+        self.assertTrue(cursor_calls)
+        self.assertTrue(cursor_calls[-1][3] & curses.A_REVERSE)
 
     def test_copy_paste_new_pattern_and_clear(self) -> None:
         self.ui.copy_pattern()
@@ -393,6 +490,33 @@ class ConsoleSeqUiLogicTests(unittest.TestCase):
         self.assertEqual(self.ui.song_slot, 32)
         self.ui.handle_key(curses.KEY_PPAGE)
         self.assertEqual(self.ui.song_slot, 16)
+
+    def test_note_length_editing_from_x_and_continuation(self) -> None:
+        self.ui.channel = 3  # Piano has an X on step 1 in the demo.
+        self.ui.step = 0
+        self.ui.handle_key(ord("e"))
+        self.assertEqual(self.ui.engine.get_duration(0, 3, 0), 1)
+        for _ in range(3):
+            self.ui.handle_key(curses.KEY_RIGHT)
+        self.assertEqual(self.ui.engine.get_duration(0, 3, 0), 4)
+        self.assertEqual(self.ui.note_start_at(0, 3, 3), 0)
+        self.ui.handle_key(27)
+        self.assertIsNone(self.ui.length_edit_anchor)
+        self.ui.step = 2
+        self.ui.handle_key(ord("e"))
+        self.assertEqual(self.ui.length_edit_anchor, (3, 0))
+        self.ui.handle_key(27)
+        self.ui.handle_key(curses.KEY_BACKSPACE)
+        self.assertFalse(self.ui.engine.get_step(0, 3, 0))
+
+    def test_unicode_prompt_replaces_default_and_ignores_ffff(self) -> None:
+        self.ui.screen = _InputScreen(list("живой бит") + ["\uffff"] + list(".cseq") + ["\n"])
+        with patch("console_seq.ui.curses.noecho"), \
+             patch("console_seq.ui.curses.curs_set"), \
+             patch("console_seq.ui.curses.color_pair", return_value=0):
+            value = self.ui.prompt("SAVE", "project.cseq")
+        self.assertEqual(value, "живой бит.cseq")
+        self.assertNotIn("\uffff", value)
 
     def test_song_panel_on_terminal_wider_than_song(self) -> None:
         # Regression: a wide Song panel used its screen capacity as the loop

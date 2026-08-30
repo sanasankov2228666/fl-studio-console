@@ -12,7 +12,8 @@ if len(native_modules) != 1:
     )
 
 binaries = [(str(native_modules[0]), "console_seq")]
-for runtime_name in ("libgcc_s_seh-1.dll", "libstdc++-6.dll", "libwinpthread-1.dll"):
+for runtime_name in ("libgcc_s_seh-1.dll", "libstdc++-6.dll", "libwinpthread-1.dll",
+                     "libfluidsynth-3.dll", "sndfile.dll"):
     runtime_path = project_root / "console_seq" / runtime_name
     if runtime_path.exists():
         binaries.append((str(runtime_path), "console_seq"))
@@ -21,7 +22,7 @@ a = Analysis(
     [str(project_root / "main.py")],
     pathex=[str(project_root)],
     binaries=binaries,
-    datas=[],
+    datas=[(str(project_root / "assets"), "assets")],
     # The native package extension is supplied explicitly above. Listing it as
     # a hidden import would let an older staged development copy override it.
     hiddenimports=["curses", "_curses"],

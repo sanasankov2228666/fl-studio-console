@@ -6,9 +6,12 @@
 /build-win/
 /build-unix/
 /dist/
+/dist-installer/
 /pyinstaller-build/
 /ConsoleSeq.exe
+/ConsoleSeq-Setup.exe
 *.pyd
+console_seq/*.dll
 *.so
 *.dylib
 *.pyc

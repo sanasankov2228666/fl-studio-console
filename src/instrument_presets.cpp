@@ -80,6 +80,55 @@ const std::vector<PresetDefinition>& instrument_presets() {
       {"cowbell", "Rap Cowbell", "Percussion", ChannelType::Drum, Oscillator::Sine, 56, .001F, .1F, 0.F, .1F, .42F, .82F, .16F},
       {"shaker", "Trap Shaker", "Percussion", ChannelType::Drum, Oscillator::Sine, 70, .001F, .1F, 0.F, .1F, .36F, .88F, .02F},
 
+      // GeneralUser GS instruments rendered by FluidSynth. Bank/program values
+      // follow General MIDI, keeping project files portable between SoundFonts.
+      {"sf_grand_piano", "Live Grand Piano", "Live Pianos", ChannelType::SoundFont, Oscillator::Sine, 60, .001F, .1F, 1.F, .1F, .58F, .7F, 0.F, 0, 0},
+      {"sf_bright_piano", "Live Bright Piano", "Live Pianos", ChannelType::SoundFont, Oscillator::Sine, 60, .001F, .1F, 1.F, .1F, .55F, .8F, 0.F, 0, 1},
+      {"sf_honky_piano", "Honky-Tonk Piano", "Live Pianos", ChannelType::SoundFont, Oscillator::Sine, 60, .001F, .1F, 1.F, .1F, .52F, .7F, 0.F, 0, 3},
+      {"sf_rhodes", "Live Rhodes", "Live Pianos", ChannelType::SoundFont, Oscillator::Sine, 60, .001F, .1F, 1.F, .1F, .54F, .7F, 0.F, 0, 4},
+      {"sf_chorus_piano", "Chorus Electric Piano", "Live Pianos", ChannelType::SoundFont, Oscillator::Sine, 60, .001F, .1F, 1.F, .1F, .52F, .7F, 0.F, 0, 5},
+      {"sf_harpsichord", "Harpsichord", "Live Pianos", ChannelType::SoundFont, Oscillator::Sine, 60, .001F, .1F, 1.F, .1F, .48F, .8F, 0.F, 0, 6},
+
+      {"sf_hammond", "Hammond Organ", "Live Organs", ChannelType::SoundFont, Oscillator::Sine, 60, .001F, .1F, 1.F, .1F, .46F, .7F, 0.F, 0, 16},
+      {"sf_percussive_organ", "Percussive Organ", "Live Organs", ChannelType::SoundFont, Oscillator::Sine, 60, .001F, .1F, 1.F, .1F, .46F, .7F, 0.F, 0, 17},
+      {"sf_church_organ", "Church Organ", "Live Organs", ChannelType::SoundFont, Oscillator::Sine, 60, .001F, .1F, 1.F, .1F, .42F, .7F, 0.F, 0, 19},
+
+      {"sf_nylon_guitar", "Nylon Guitar", "Live Guitars", ChannelType::SoundFont, Oscillator::Sine, 52, .001F, .1F, 1.F, .1F, .50F, .7F, 0.F, 0, 24},
+      {"sf_steel_guitar", "Steel Acoustic Guitar", "Live Guitars", ChannelType::SoundFont, Oscillator::Sine, 52, .001F, .1F, 1.F, .1F, .48F, .8F, 0.F, 0, 25},
+      {"sf_jazz_guitar", "Jazz Electric Guitar", "Live Guitars", ChannelType::SoundFont, Oscillator::Sine, 52, .001F, .1F, 1.F, .1F, .46F, .7F, 0.F, 0, 26},
+      {"sf_clean_guitar", "Clean Electric Guitar", "Live Guitars", ChannelType::SoundFont, Oscillator::Sine, 52, .001F, .1F, 1.F, .1F, .44F, .8F, 0.F, 0, 27},
+      {"sf_muted_guitar", "Muted Electric Guitar", "Live Guitars", ChannelType::SoundFont, Oscillator::Sine, 52, .001F, .1F, 1.F, .1F, .44F, .8F, 0.F, 0, 28},
+      {"sf_drive_guitar", "Overdrive Guitar", "Live Guitars", ChannelType::SoundFont, Oscillator::Sine, 52, .001F, .1F, 1.F, .1F, .38F, .8F, 0.F, 0, 29},
+
+      {"sf_acoustic_bass", "Acoustic Bass", "Live Basses", ChannelType::SoundFont, Oscillator::Sine, 36, .001F, .1F, 1.F, .1F, .58F, .6F, 0.F, 0, 32},
+      {"sf_finger_bass", "Fingered Electric Bass", "Live Basses", ChannelType::SoundFont, Oscillator::Sine, 36, .001F, .1F, 1.F, .1F, .56F, .6F, 0.F, 0, 33},
+      {"sf_pick_bass", "Picked Electric Bass", "Live Basses", ChannelType::SoundFont, Oscillator::Sine, 36, .001F, .1F, 1.F, .1F, .54F, .7F, 0.F, 0, 34},
+      {"sf_fretless_bass", "Fretless Bass", "Live Basses", ChannelType::SoundFont, Oscillator::Sine, 36, .001F, .1F, 1.F, .1F, .54F, .6F, 0.F, 0, 35},
+      {"sf_slap_bass", "Slap Bass", "Live Basses", ChannelType::SoundFont, Oscillator::Sine, 38, .001F, .1F, 1.F, .1F, .50F, .8F, 0.F, 0, 36},
+
+      {"sf_violin", "Solo Violin", "Orchestral", ChannelType::SoundFont, Oscillator::Sine, 67, .001F, .1F, 1.F, .1F, .42F, .7F, 0.F, 0, 40},
+      {"sf_viola", "Solo Viola", "Orchestral", ChannelType::SoundFont, Oscillator::Sine, 60, .001F, .1F, 1.F, .1F, .42F, .7F, 0.F, 0, 41},
+      {"sf_cello", "Solo Cello", "Orchestral", ChannelType::SoundFont, Oscillator::Sine, 48, .001F, .1F, 1.F, .1F, .44F, .6F, 0.F, 0, 42},
+      {"sf_contrabass", "Contrabass", "Orchestral", ChannelType::SoundFont, Oscillator::Sine, 36, .001F, .1F, 1.F, .1F, .46F, .6F, 0.F, 0, 43},
+      {"sf_tremolo_strings", "Tremolo Strings", "Orchestral", ChannelType::SoundFont, Oscillator::Sine, 60, .001F, .1F, 1.F, .1F, .40F, .7F, 0.F, 0, 44},
+      {"sf_pizzicato", "Pizzicato Strings", "Orchestral", ChannelType::SoundFont, Oscillator::Sine, 60, .001F, .1F, 1.F, .1F, .44F, .8F, 0.F, 0, 45},
+      {"sf_harp", "Orchestral Harp", "Orchestral", ChannelType::SoundFont, Oscillator::Sine, 60, .001F, .1F, 1.F, .1F, .44F, .8F, 0.F, 0, 46},
+      {"sf_string_ensemble", "Live String Ensemble", "Orchestral", ChannelType::SoundFont, Oscillator::Sine, 60, .001F, .1F, 1.F, .1F, .40F, .6F, 0.F, 0, 48},
+
+      {"sf_trumpet", "Trumpet", "Brass & Winds", ChannelType::SoundFont, Oscillator::Sine, 60, .001F, .1F, 1.F, .1F, .42F, .8F, 0.F, 0, 56},
+      {"sf_trombone", "Trombone", "Brass & Winds", ChannelType::SoundFont, Oscillator::Sine, 48, .001F, .1F, 1.F, .1F, .44F, .7F, 0.F, 0, 57},
+      {"sf_brass_section", "Brass Section", "Brass & Winds", ChannelType::SoundFont, Oscillator::Sine, 52, .001F, .1F, 1.F, .1F, .40F, .7F, 0.F, 0, 61},
+      {"sf_soprano_sax", "Soprano Sax", "Brass & Winds", ChannelType::SoundFont, Oscillator::Sine, 60, .001F, .1F, 1.F, .1F, .42F, .8F, 0.F, 0, 64},
+      {"sf_alto_sax", "Alto Sax", "Brass & Winds", ChannelType::SoundFont, Oscillator::Sine, 55, .001F, .1F, 1.F, .1F, .42F, .8F, 0.F, 0, 65},
+      {"sf_flute", "Flute", "Brass & Winds", ChannelType::SoundFont, Oscillator::Sine, 72, .001F, .1F, 1.F, .1F, .40F, .8F, 0.F, 0, 73},
+      {"sf_clarinet", "Clarinet", "Brass & Winds", ChannelType::SoundFont, Oscillator::Sine, 67, .001F, .1F, 1.F, .1F, .40F, .8F, 0.F, 0, 71},
+
+      {"sf_drums_standard", "GM Standard Live Kit", "Live Drums", ChannelType::SoundFont, Oscillator::Sine, 36, .001F, .1F, 1.F, .1F, .52F, .7F, 0.F, 128, 0},
+      {"sf_drums_room", "GM Room Kit", "Live Drums", ChannelType::SoundFont, Oscillator::Sine, 36, .001F, .1F, 1.F, .1F, .50F, .7F, 0.F, 128, 8},
+      {"sf_drums_power", "GM Power Kit", "Live Drums", ChannelType::SoundFont, Oscillator::Sine, 36, .001F, .1F, 1.F, .1F, .48F, .8F, 0.F, 128, 16},
+      {"sf_drums_jazz", "GM Jazz Kit", "Live Drums", ChannelType::SoundFont, Oscillator::Sine, 36, .001F, .1F, 1.F, .1F, .50F, .7F, 0.F, 128, 32},
+      {"sf_drums_orchestra", "GM Orchestra Kit", "Live Drums", ChannelType::SoundFont, Oscillator::Sine, 36, .001F, .1F, 1.F, .1F, .46F, .8F, 0.F, 128, 48},
+
       // Generated effects.
       {"fx_impact", "Impact", "FX", ChannelType::Drum, Oscillator::Sine, 36, .001F, .1F, 0.F, .1F, .48F, .58F, .30F},
       {"fx_riser", "Noise Riser", "FX", ChannelType::Drum, Oscillator::Sine, 72, .001F, .1F, 0.F, .1F, .34F, .88F, .04F},

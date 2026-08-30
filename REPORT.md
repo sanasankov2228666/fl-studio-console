@@ -1,41 +1,42 @@
-# ConsoleSeq 1.2 implementation report
+# ConsoleSeq 1.3.1 implementation report
 
 ## Result
 
-ConsoleSeq was upgraded without replacing its established four-panel curses workflow. The C++17 engine remains responsible for real-time sequencing, synthesis, sample playback, mixing and persistence; Python remains a thin keyboard/UI layer.
+ConsoleSeq keeps its established four-panel curses workflow while adding a sampled instrument layer. The C++17 engine now embeds FluidSynth support and loads the bundled GeneralUser GS SoundFont. The original 60 generated/modelled presets remain available; 40 General MIDI presets add grand and electric pianos, organs, acoustic/electric guitars, live basses, strings, brass, winds, and five drum kits.
 
-The instrument library is now a separate catalog module with 60 fully portable generated/modelled presets across Pianos, Kicks, Basses, Guitars, Strings, Synths, Snares, Hi-hats, Percussion and FX. The UI presents these as category tabs. New styles cover trap, modern rap, 808, new-jazz, jerk and Detroit sounds. No external copyrighted pack is distributed.
+Three user-supplied kit directories were copied into the portable asset library. The instrument browser exposes 167 audio one-shots (163 WAV and 4 MP3) in 19 kit/folder tabs: Hard Times Detroit, Yakittido New Jazz, and Local drum_kits. Non-audio documents and DAW preset/project files from the source folders were not interpreted as instructions and were not exposed as sounds.
 
-Patterns and Song are dynamic up to 512 entries. Lowercase `n` adds one pattern, uppercase `N` adds 16, Page Up/Down moves through banks, and the main menu sets Song length. Pattern and channel deletion repair all related grids and references. Channel cloning, pattern copy/paste, per-step note/velocity, per-channel mixer values and play-position visualization remain integrated with the existing UI.
+Pattern steps now store an optional duration. A normal `X` retains classic one-shot/natural-decay behavior. Pressing `E` on the `X` or any continuation cell enters length editing; Left/Right produces a colored `X ===` gate and `E`/Esc exits. Explicit gates stop procedural voices, SoundFont notes, and long user samples at the selected boundary. Durations survive copy/paste and project round trips.
 
-Project persistence now writes atomically through a temporary file and preserves dynamic channels, instruments, mixer data, 16/32/64-step grids, notes, velocity, all patterns and the complete Song arrangement. Loading no longer truncates arrangements to 16 slots. User audio accepts WAV through libsndfile and MP3 through the embedded dr_mp3 decoder; a failed load keeps the prior sound.
+Version 1.3.1 gives the Pattern cursor a dedicated black-on-white background instead of relying on underline support. The selected cell is therefore visible on active `X`, continuation `=`, and empty `.` cells independently of channel color and Windows terminal underline behavior.
 
-## Architecture work
+The save prompt was replaced with a wide-character editor, fixing the Windows curses failure that produced filenames containing invalid U+FFFF characters. `.cseq` version 4 persists channel/preset data, SoundFont bank/program, mixer values, external sample paths, portable `asset://` kit references, patterns, note/velocity/duration values, and the full Song arrangement. Saving remains atomic through a temporary file plus replacement.
 
-- Extracted preset definitions from the engine into `instrument_presets.hpp/.cpp`.
-- Added bounded constants for 32 channels, 512 patterns and 512 Song slots.
-- Kept callback-facing project snapshots immutable and file operations outside the real-time callback.
-- Added shared decode/resample handling for WAV/MP3.
-- Made development imports prefer the fresh build module, avoiding stale locked `.pyd` files.
-- Added a pinned PyInstaller spec and `.cmd` wrapper that is not blocked by PowerShell execution policy.
+## Architecture and packaging
+
+- FluidSynth is linked into the C++ engine and rendered inside the existing audio callback.
+- GeneralUser GS, its license, the FluidSynth license, and all kit files are packaged as PyInstaller data.
+- `console_seq/assets.py` resolves source-tree and frozen-EXE assets and provides the hierarchical sample catalog.
+- Bundled samples save as portable `asset://drum_kits/...` references; external user files keep their filesystem paths.
+- Windows setup downloads the official FluidSynth 2.6.0 SDK/runtime and GeneralUser GS when absent, builds the extension, stages the required DLLs, tests, and creates the one-file EXE.
+- An Inno Setup definition and automatic `build_installer.cmd` create a per-user Windows installer with shortcuts, uninstall entry, project directory, and `.cseq` association. The portable single-file EXE remains available.
+- Linux installs `libfluidsynth-dev`; macOS installs `fluid-synth` through Homebrew.
 
 ## Verification
 
-On 64-bit Windows 11/Python 3.12:
+Verified on 64-bit Windows with Python 3.12:
 
 - native CTest suite: passed;
-- 19 Python integration/UI tests: passed;
-- all 60 presets produced non-silent rendered audio;
-- WAV and embedded MP3 decode/render tests: passed;
-- Unicode-path and repeated atomic save/load tests: passed;
-- 48/64-slot Song and 16-pattern bank round trips: passed;
-- channel/pattern add, duplicate, delete and reference-repair tests: passed;
-- 260-column Song-panel regression test: passed;
-- standalone `ConsoleSeq.exe` smoke-tested from a separate directory with `PYTHONHOME` and `PYTHONPATH` removed;
-- standalone curses UI opened in a pseudo-terminal and exited cleanly with `Q`.
-
-The resulting one-file Windows executable is `ConsoleSeq.exe`. It contains Python, curses, the fresh native extension and required runtime DLLs. A true hardware/audio check still depends on the target machine having a usable output device; the verified host previously opened RtAudio/WASAPI successfully.
+- 25 Python engine/UI integration tests: passed, including a high-contrast cursor regression test;
+- all 100 preset definitions rendered non-silent audio;
+- GeneralUser GS loaded through FluidSynth and survived project save/load;
+- all 167 bundled audio files decoded successfully (163 WAV, 4 MP3, zero failures);
+- gated sample tail was silent while the same sample in one-shot mode remained audible;
+- Unicode project path, atomic overwrite, and invalid-load state preservation tests passed;
+- dynamic patterns/song banks, channel removal, copy/paste, duration editing, and wide Song-panel regression tests passed;
+- standalone EXE smoke test checks procedural audio, FluidSynth/SF2, bundled WAV and MP3 decoding, and save/load from an isolated directory.
+- installer test: silent per-user installation, installed-EXE smoke test, and clean uninstall all passed.
 
 ## Deliberate limitations
 
-The built-in acoustic instruments are compact synthesis/models, not multisampled studio libraries. Custom samples are referenced rather than embedded in `.cseq`. Recording, VST, automation, graphical piano roll, effects chains and WAV export remain roadmap items.
+The sequencer currently stores one pitch per step and one active FluidSynth note per channel; it is not yet a graphical polyphonic piano roll. External user samples are referenced rather than copied into `.cseq`. Recording, VST plug-ins, automation lanes, effects chains, MIDI input, time-stretching, and WAV export remain roadmap items. The included kit audio was supplied by the project owner as free material; its original pack terms remain separate from the application-code license.

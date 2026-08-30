@@ -3,6 +3,7 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -24,13 +25,16 @@ constexpr int kMaxChannels = 32;
 constexpr int kMaxPatterns = 512;
 constexpr int kMaxSongSlots = 512;
 
-enum class ChannelType { Drum, Piano, Bass, Synth };
+enum class ChannelType { Drum, Piano, Bass, Synth, SoundFont };
 enum class Oscillator { Sine, Square, Saw, Triangle };
 
 struct Step {
   bool active{false};
   int note{60};
   float velocity{1.0F};
+  // Zero preserves the classic one-shot/natural-decay behavior. Positive
+  // values gate the voice to this many sequencer steps.
+  int duration_steps{0};
 };
 
 class Pattern {
@@ -44,6 +48,8 @@ class Pattern {
   int get_note(int channel, int step) const;
   void set_velocity(int channel, int step, float velocity);
   float get_velocity(int channel, int step) const;
+  void set_duration(int channel, int step, int duration_steps);
+  int get_duration(int channel, int step) const;
   void clear();
   void resize_channels(int count);
   void resize_steps(int count);
@@ -90,6 +96,8 @@ class Channel {
   void set_drive(float value);
   const std::string& sample_path() const;
   const std::string& builtin_id() const;
+  int soundfont_bank() const;
+  int soundfont_program() const;
   bool set_sample(const std::string& filename);
   void set_builtin_id(const std::string& value);
   void set_synth_param(const std::string& parameter, float value);
@@ -111,6 +119,8 @@ class Channel {
   float drive_{0.0F};
   std::string sample_path_;
   std::string builtin_id_;
+  int soundfont_bank_{-1};
+  int soundfont_program_{-1};
   std::shared_ptr<const std::vector<float>> sample_;
 
   friend class Engine;
@@ -193,6 +203,8 @@ class Engine {
   void set_note(int pattern, int channel, int step, int note);
   float get_velocity(int pattern, int channel, int step) const;
   void set_velocity(int pattern, int channel, int step, float velocity);
+  int get_duration(int pattern, int channel, int step) const;
+  void set_duration(int pattern, int channel, int step, int duration_steps);
   void clear_pattern(int pattern);
   int add_pattern(const std::string& name = "");
   int add_pattern_bank(int count = 16);
@@ -213,6 +225,10 @@ class Engine {
   void set_channel_solo(int channel, bool value);
   void set_channel_base_note(int channel, int value);
   bool set_channel_sample(int channel, const std::string& filename);
+  void set_asset_root(const std::string& directory);
+  bool set_soundfont(const std::string& filename);
+  bool soundfont_available() const;
+  std::string soundfont_status() const;
   void set_synth_param(int channel, const std::string& parameter, float value);
 
   std::vector<float> render_offline(float seconds);
@@ -228,21 +244,26 @@ class Engine {
     double phase{0.0};
     double age{0.0};
     double release_at{0.0};
+    double gate_at{-1.0};
     float velocity{1.0F};
     int note{60};
     float filter_state{0.0F};
   };
   struct RuntimeChannel { std::array<Voice, 8> voices{}; };
+  struct FluidSynthState;
 
   void publish_locked();
   static Channel make_preset_channel(const std::string& preset_id);
   static std::shared_ptr<const std::vector<float>> generate_builtin(const std::string& id);
   static std::shared_ptr<const std::vector<float>> load_audio_file(const std::string& filename);
+  std::string resolve_audio_reference(const std::string& reference) const;
+  std::string portable_audio_reference(const std::string& filename) const;
   static double midi_frequency(int note);
   void render(float* output, unsigned int frames);
   void reset_runtime_if_needed(const std::shared_ptr<const ProjectState>& state);
   void trigger_step(const std::shared_ptr<const ProjectState>& state, int global_step);
-  void trigger_voice(RuntimeChannel& runtime, const Channel& channel, const Step& step);
+  void trigger_voice(RuntimeChannel& runtime, const Channel& channel, const Step& step,
+                     double seconds_per_step);
   float render_voice(Voice& voice, const Channel& channel);
   void silent_loop();
 
@@ -265,12 +286,14 @@ class Engine {
   std::atomic<std::uint64_t> transport_revision_{0};
   std::thread silent_thread_;
   std::vector<RuntimeChannel> runtime_;
+  std::unique_ptr<FluidSynthState> fluidsynth_;
   std::uint64_t runtime_state_revision_{0};
   std::uint64_t runtime_transport_revision_{0};
   double step_phase_{0.0};
   int global_step_{0};
   mutable std::string last_error_;
   std::string audio_status_{"not started"};
+  std::filesystem::path asset_root_;
 };
 
 }  // namespace consoleseq

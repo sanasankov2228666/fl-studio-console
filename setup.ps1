@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [switch]$SkipTests,
-    [switch]$SkipExe
+    [switch]$SkipExe,
+    [switch]$SkipInstaller
 )
 
 $ErrorActionPreference = "Stop"
@@ -112,11 +113,52 @@ function Find-OrDownloadCompiler {
     return Split-Path -Parent $localCompiler
 }
 
+function Get-OrDownloadFluidSynth {
+    $fluidRoot = Join-Path $ToolsDir "fluidsynth-2.6.0\fluidsynth-v2.6.0-win10-x64-cpp11"
+    $fluidDll = Join-Path $fluidRoot "bin\libfluidsynth-3.dll"
+    if (-not (Test-Path -LiteralPath $fluidDll)) {
+        $archive = Join-Path $ToolsDir "fluidsynth-v2.6.0-win10-x64-cpp11.zip"
+        if (-not (Test-Path -LiteralPath $archive) -or (Get-Item $archive).Length -lt 1MB) {
+            Write-Host "Downloading FluidSynth 2.6.0 runtime and development files..."
+            curl.exe -fL --retry 3 -o $archive `
+                "https://github.com/FluidSynth/fluidsynth/releases/download/v2.6.0/fluidsynth-v2.6.0-win10-x64-cpp11.zip"
+            if ($LASTEXITCODE -ne 0) { throw "FluidSynth download failed." }
+        }
+        $destination = Split-Path -Parent $fluidRoot
+        New-Item -ItemType Directory -Force -Path $destination | Out-Null
+        Expand-Archive -LiteralPath $archive -DestinationPath $destination -Force
+    }
+    if (-not (Test-Path -LiteralPath $fluidDll)) { throw "FluidSynth runtime is incomplete." }
+    return $fluidRoot
+}
+
+function Get-OrDownloadSoundFont {
+    $soundFontDirectory = Join-Path $ProjectRoot "assets\soundfonts"
+    $soundFont = Join-Path $soundFontDirectory "GeneralUser-GS.sf2"
+    $license = Join-Path $soundFontDirectory "GeneralUser-GS-LICENSE.txt"
+    if (-not (Test-Path -LiteralPath $soundFont) -or (Get-Item $soundFont).Length -lt 20MB) {
+        New-Item -ItemType Directory -Force -Path $soundFontDirectory | Out-Null
+        Write-Host "Downloading GeneralUser GS SoundFont..."
+        curl.exe -fL --retry 3 -o $soundFont `
+            "https://raw.githubusercontent.com/mrbumpy409/GeneralUser-GS/main/GeneralUser-GS.sf2"
+        if ($LASTEXITCODE -ne 0) { throw "GeneralUser GS download failed." }
+    }
+    if (-not (Test-Path -LiteralPath $license)) {
+        curl.exe -fL --retry 3 -o $license `
+            "https://raw.githubusercontent.com/mrbumpy409/GeneralUser-GS/main/documentation/LICENSE.txt"
+        if ($LASTEXITCODE -ne 0) { throw "GeneralUser GS license download failed." }
+    }
+    return $soundFont
+}
+
 $Python = Get-OrDownloadPython
 $CMake = Get-OrDownloadCMake
 $Ninja = Get-OrDownloadNinja
 $CompilerBin = Find-OrDownloadCompiler
-$env:Path = "$CompilerBin;$env:Path"
+$FluidRoot = Get-OrDownloadFluidSynth
+$SoundFont = Get-OrDownloadSoundFont
+$FluidBin = Join-Path $FluidRoot "bin"
+$env:Path = "$FluidBin;$CompilerBin;$env:Path"
 
 if (-not (Test-UsablePython (Join-Path $VenvDir "Scripts\python.exe"))) {
     Remove-GeneratedDirectory $VenvDir
@@ -144,6 +186,7 @@ Write-Host "Configuring ConsoleSeq..."
     "-DCMAKE_MAKE_PROGRAM=$Ninja" `
     "-DCMAKE_BUILD_TYPE=Release" `
     "-DPython_EXECUTABLE=$VenvPython" `
+    "-DCMAKE_PREFIX_PATH=$FluidRoot" `
     "-DCMAKE_INSTALL_PREFIX=$ProjectRoot"
 if ($LASTEXITCODE -ne 0) { throw "CMake configuration failed." }
 
@@ -164,6 +207,11 @@ foreach ($runtimeName in @("libgcc_s_seh-1.dll", "libstdc++-6.dll", "libwinpthre
         Copy-Item -LiteralPath $runtimePath -Destination (Join-Path $ProjectRoot "console_seq") -Force
     }
 }
+foreach ($fluidRuntimeName in @("libfluidsynth-3.dll", "sndfile.dll")) {
+    $fluidRuntimePath = Join-Path $FluidBin $fluidRuntimeName
+    Copy-Item -LiteralPath $fluidRuntimePath -Destination (Join-Path $BuildDir "python") -Force
+    Copy-Item -LiteralPath $fluidRuntimePath -Destination (Join-Path $ProjectRoot "console_seq") -Force
+}
 
 if (-not $SkipTests) {
     & $CMake --build $BuildDir --target test
@@ -178,6 +226,10 @@ if (-not $SkipTests) {
 if (-not $SkipExe) {
     & (Join-Path $ProjectRoot "build_exe.ps1")
     if ($LASTEXITCODE -ne 0) { throw "Standalone executable build failed." }
+    if (-not $SkipInstaller) {
+        & (Join-Path $ProjectRoot "build_installer.ps1") -SkipExeBuild
+        if ($LASTEXITCODE -ne 0) { throw "Windows installer build failed." }
+    }
 }
 
 Write-Host ""

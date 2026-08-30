@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Iterable
 
 from .core import ChannelType, Engine
+from .assets import asset_root, default_soundfont, resolve_sample_id, sample_catalog
 
 
 FOCUSES = ("PATTERN", "SONG", "MIXER")
@@ -29,13 +30,21 @@ class ConsoleSeqUI:
     def __init__(self, screen, project: str | None = None, no_audio: bool = False):
         self.screen = screen
         self.engine = Engine()
+        self.engine.set_asset_root(str(asset_root()))
+        soundfont = default_soundfont()
+        self.soundfont_ready = soundfont.is_file() and self.engine.set_soundfont(str(soundfont))
+        self.colors_enabled = False
         self.focus_index = 0
         self.channel = 0
         self.step = 0
         self.song_slot = 0
+        self.length_edit_anchor: tuple[int, int] | None = None
         self.status = "Ready. The demo beat is loaded; press P to play."
+        if not self.soundfont_ready:
+            detail = self.engine.last_error() or "GeneralUser-GS.sf2 was not found"
+            self.status = f"FluidSynth unavailable ({detail}); procedural instruments still work"
         self.project_file = Path(project).expanduser() if project else Path("project.cseq")
-        self.clipboard: list[list[tuple[bool, int, float]]] | None = None
+        self.clipboard: list[list[tuple[bool, int, float, int]]] | None = None
         self.running = True
         self.no_audio = no_audio
         if project:
@@ -72,11 +81,46 @@ class ConsoleSeqUI:
         if curses.has_colors():
             curses.start_color()
             curses.use_default_colors()
+            self.colors_enabled = True
             curses.init_pair(1, curses.COLOR_BLACK, curses.COLOR_CYAN)
             curses.init_pair(2, curses.COLOR_CYAN, -1)
             curses.init_pair(3, curses.COLOR_GREEN, -1)
             curses.init_pair(4, curses.COLOR_YELLOW, -1)
             curses.init_pair(5, curses.COLOR_RED, -1)
+            for pair, color in enumerate((curses.COLOR_CYAN, curses.COLOR_GREEN,
+                                          curses.COLOR_YELLOW, curses.COLOR_MAGENTA,
+                                          curses.COLOR_BLUE, curses.COLOR_RED,
+                                          curses.COLOR_WHITE), start=6):
+                curses.init_pair(pair, color, -1)
+            # A neutral, high-contrast cursor is intentionally independent of
+            # channel color so it remains visible on X, =, and empty cells.
+            curses.init_pair(13, curses.COLOR_BLACK, curses.COLOR_WHITE)
+
+    @staticmethod
+    def channel_color(channel: int) -> int:
+        return curses.color_pair(6 + channel % 7)
+
+    def pattern_cursor_attr(self) -> int:
+        if self.colors_enabled:
+            return curses.color_pair(13) | curses.A_BOLD
+        return curses.A_REVERSE | curses.A_BOLD
+
+    def note_start_at(self, pattern: int, channel: int, step: int) -> int | None:
+        """Return the note owning a cell, including an X note's = continuation."""
+        if self.engine.get_step(pattern, channel, step):
+            return step
+        for start in range(step - 1, -1, -1):
+            if not self.engine.get_step(pattern, channel, start):
+                continue
+            duration = self.engine.get_duration(pattern, channel, start)
+            return start if duration > 1 and step < start + duration else None
+        return None
+
+    def note_max_duration(self, pattern: int, channel: int, start: int) -> int:
+        for step in range(start + 1, self.engine.step_count()):
+            if self.engine.get_step(pattern, channel, step):
+                return step - start
+        return self.engine.step_count() - start
 
     def put(self, y: int, x: int, text: object, attr: int = 0, width: int | None = None) -> None:
         height, screen_width = self.screen.getmaxyx()
@@ -139,7 +183,7 @@ class ConsoleSeqUI:
         self.draw_mixer(body_y + upper_height, 0, mixer_height, width)
 
         hint = {
-            "PATTERN": "Arrows move | PgUp/PgDn bank | n new | N +16 | B/R/X pattern | Enter channel",
+            "PATTERN": "Arrows move | E note length | PgUp/PgDn bank | n/N patterns | Enter channel",
             "SONG": "Arrows move | PgUp/PgDn slots | Space cycles | 1-9/G assign | Backspace empty",
             "MIXER": "PgUp/PgDn channel | Up/Down volume | Left/Right pan | M mute | O solo",
         }[self.focus]
@@ -172,16 +216,25 @@ class ConsoleSeqUI:
             for offset in range(visible_steps):
                 step = step_start + offset
                 active = self.engine.get_step(self.engine.current_pattern(), channel_index, step)
-                marker = "X" if active else "."
-                attr = curses.color_pair(3) | curses.A_BOLD if active else curses.A_DIM
+                owner = self.note_start_at(self.engine.current_pattern(), channel_index, step)
+                continuation = not active and owner is not None
+                marker = "X" if active else ("=" if continuation else ".")
+                attr = self.channel_color(channel_index) | curses.A_BOLD if (active or continuation) else curses.A_DIM
+                if self.length_edit_anchor == (channel_index, owner):
+                    attr |= curses.A_REVERSE
                 if self.focus == "PATTERN" and selected_row and step == self.step:
-                    attr = curses.color_pair(1) | curses.A_BOLD
+                    attr = self.pattern_cursor_attr()
                 self.put(row_y, grid_x + offset * cell_width, marker.center(cell_width - 1), attr, cell_width - 1)
         selected = self.engine.get_channel(self.channel)
         if selected.type != ChannelType.DRUM and height >= 9:
-            note = self.engine.get_note(self.engine.current_pattern(), self.channel, self.step)
+            owner = self.note_start_at(self.engine.current_pattern(), self.channel, self.step)
+            note_step = owner if owner is not None else self.step
+            note = self.engine.get_note(self.engine.current_pattern(), self.channel, note_step)
+            duration = self.engine.get_duration(self.engine.current_pattern(), self.channel,
+                                                note_step)
+            gate = "one-shot" if duration == 0 else f"gate {duration} step(s)"
             self.put(y + height - 2, x + 2,
-                     f"Note {note_name(note)} ({note}) velocity {self.engine.get_velocity(self.engine.current_pattern(), self.channel, self.step):.2f}",
+                     f"Note {note_name(note)} ({note}) vel {self.engine.get_velocity(self.engine.current_pattern(), self.channel, self.step):.2f} {gate}",
                      curses.color_pair(4), width - 4)
 
     def draw_channels(self, y: int, x: int, height: int, width: int) -> None:
@@ -251,6 +304,23 @@ class ConsoleSeqUI:
 
     def handle_key(self, key: int) -> None:
         if key == -1:
+            return
+        if self.length_edit_anchor is not None:
+            if key in (27, ord("e"), ord("E")):
+                self.length_edit_anchor = None
+                self.status = "Note-length editing finished"
+                return
+            if key in (curses.KEY_LEFT, curses.KEY_RIGHT):
+                pattern = self.engine.current_pattern()
+                channel, start = self.length_edit_anchor
+                current = max(1, self.engine.get_duration(pattern, channel, start))
+                maximum = self.note_max_duration(pattern, channel, start)
+                updated = max(1, min(maximum, current + (-1 if key == curses.KEY_LEFT else 1)))
+                self.engine.set_duration(pattern, channel, start, updated)
+                self.step = start + updated - 1
+                self.status = f"Note length: {updated} step(s); Left/Right resize, Esc finishes"
+                return
+            self.status = "Length edit: Left/Right resize, E or Esc finishes"
             return
         if key in (ord("q"), ord("Q")):
             self.running = False
@@ -359,12 +429,34 @@ class ConsoleSeqUI:
             elif key == curses.KEY_DOWN:
                 self.channel = (self.channel + 1) % self.engine.channel_count()
             elif key == ord(" "):
-                value = self.engine.get_step(self.engine.current_pattern(), self.channel, self.step)
-                self.engine.set_step(self.engine.current_pattern(), self.channel, self.step, not value)
+                pattern = self.engine.current_pattern()
+                value = self.engine.get_step(pattern, self.channel, self.step)
+                if not value:
+                    owner = self.note_start_at(pattern, self.channel, self.step)
+                    if owner is not None:
+                        self.engine.set_duration(pattern, self.channel, owner, self.step - owner)
+                self.engine.set_step(pattern, self.channel, self.step, not value)
+                if value:
+                    self.engine.set_duration(pattern, self.channel, self.step, 0)
+            elif key in (ord("e"), ord("E")):
+                pattern = self.engine.current_pattern()
+                owner = self.note_start_at(pattern, self.channel, self.step)
+                if owner is None:
+                    self.status = "Put the cursor on an X or = before pressing E"
+                else:
+                    if self.engine.get_duration(pattern, self.channel, owner) == 0:
+                        self.engine.set_duration(pattern, self.channel, owner, 1)
+                    self.length_edit_anchor = (self.channel, owner)
+                    self.step = owner
+                    self.status = "Length edit: Left/Right resize, E or Esc finishes"
             elif key in (10, 13, curses.KEY_ENTER):
                 self.instrument_dialog()
             elif key in (curses.KEY_BACKSPACE, curses.KEY_DC, 8, 127):
-                self.engine.set_step(self.engine.current_pattern(), self.channel, self.step, False)
+                pattern = self.engine.current_pattern()
+                owner = self.note_start_at(pattern, self.channel, self.step)
+                target = self.step if owner is None else owner
+                self.engine.set_step(pattern, self.channel, target, False)
+                self.engine.set_duration(pattern, self.channel, target, 0)
             elif key in (ord("["), ord("]")):
                 direction = -1 if key == ord("[") else 1
                 note = self.engine.get_note(self.engine.current_pattern(), self.channel, self.step)
@@ -442,6 +534,7 @@ class ConsoleSeqUI:
             self.engine.get_step(pattern, channel, step),
             self.engine.get_note(pattern, channel, step),
             self.engine.get_velocity(pattern, channel, step),
+            self.engine.get_duration(pattern, channel, step),
         ) for step in range(self.engine.step_count())] for channel in range(self.engine.channel_count())]
         self.status = f"Copied Pattern {pattern + 1}"
 
@@ -451,10 +544,11 @@ class ConsoleSeqUI:
             return
         pattern = self.engine.current_pattern()
         for channel, row in enumerate(self.clipboard[: self.engine.channel_count()]):
-            for step, (active, note, velocity) in enumerate(row[: self.engine.step_count()]):
+            for step, (active, note, velocity, duration) in enumerate(row[: self.engine.step_count()]):
                 self.engine.set_step(pattern, channel, step, active)
                 self.engine.set_note(pattern, channel, step, note)
                 self.engine.set_velocity(pattern, channel, step, velocity)
+                self.engine.set_duration(pattern, channel, step, duration)
         self.status = f"Pasted into Pattern {pattern + 1}"
 
     def prompt(self, title: str, default: str = "") -> str | None:
@@ -462,22 +556,72 @@ class ConsoleSeqUI:
         popup_width = min(max(40, len(default) + 8), width - 4)
         popup_y = max(1, height // 2 - 2)
         popup_x = max(1, (width - popup_width) // 2)
-        self.box(popup_y, popup_x, 5, popup_width, title, True)
-        self.put(popup_y + 2, popup_x + 2, " " * (popup_width - 4), curses.A_REVERSE)
-        self.put(popup_y + 2, popup_x + 2, default, curses.A_REVERSE, popup_width - 4)
-        self.screen.refresh()
-        curses.echo()
-        curses.curs_set(1)
+        field_width = popup_width - 5
+        value = list(default)
+        cursor = len(value)
+        replace_default = bool(default)
+        curses.noecho()
         try:
-            self.screen.move(popup_y + 2, popup_x + 2 + min(len(default), popup_width - 5))
-            raw = self.screen.getstr(popup_y + 2, popup_x + 2, popup_width - 5)
-            value = raw.decode(sys.getfilesystemencoding(), errors="replace").strip()
-            return value or default or None
+            curses.curs_set(1)
+        except curses.error:
+            pass
+        self.screen.timeout(-1)
+        try:
+            while True:
+                self.box(popup_y, popup_x, 5, popup_width, title, True)
+                start = max(0, cursor - field_width + 1)
+                visible = "".join(value[start:start + field_width])
+                self.put(popup_y + 2, popup_x + 2, " " * field_width, curses.A_REVERSE, field_width)
+                self.put(popup_y + 2, popup_x + 2, visible, curses.A_REVERSE, field_width)
+                self.screen.move(popup_y + 2, popup_x + 2 + min(field_width - 1, cursor - start))
+                self.screen.refresh()
+                key = self.screen.get_wch()
+                if key in ("\n", "\r") or key == curses.KEY_ENTER:
+                    result = "".join(value).strip()
+                    return result or default or None
+                if key == "\x1b":
+                    return None
+                if key in (curses.KEY_BACKSPACE, "\b", "\x7f"):
+                    replace_default = False
+                    if cursor > 0:
+                        del value[cursor - 1]
+                        cursor -= 1
+                elif key == curses.KEY_DC:
+                    replace_default = False
+                    if cursor < len(value):
+                        del value[cursor]
+                elif key == curses.KEY_LEFT:
+                    replace_default = False
+                    cursor = max(0, cursor - 1)
+                elif key == curses.KEY_RIGHT:
+                    replace_default = False
+                    cursor = min(len(value), cursor + 1)
+                elif key == curses.KEY_HOME:
+                    replace_default = False
+                    cursor = 0
+                elif key == curses.KEY_END:
+                    replace_default = False
+                    cursor = len(value)
+                elif key == "\x15":  # Ctrl+U clears the field.
+                    value.clear()
+                    cursor = 0
+                    replace_default = False
+                elif isinstance(key, str) and key.isprintable() and key != "\uffff":
+                    if replace_default:
+                        value.clear()
+                        cursor = 0
+                        replace_default = False
+                    value.insert(cursor, key)
+                    cursor += 1
         except (curses.error, KeyboardInterrupt):
             return None
         finally:
             curses.noecho()
-            curses.curs_set(0)
+            self.screen.timeout(80)
+            try:
+                curses.curs_set(0)
+            except curses.error:
+                pass
 
     def confirm(self, question: str) -> bool:
         height, width = self.screen.getmaxyx()
@@ -499,12 +643,13 @@ class ConsoleSeqUI:
         y, x = max(1, (height - popup_height) // 2), max(1, (width - popup_width) // 2)
         oscillator = str(channel.oscillator).split(".")[-1]
         attack, decay, sustain, release = channel.adsr
-        kind = "DRUM" if channel.type == ChannelType.DRUM else "SYNTH"
+        kind = ("DRUM" if channel.type == ChannelType.DRUM else
+                "SOUNDFONT" if channel.type == ChannelType.SOUNDFONT else "SYNTH")
         self.box(y, x, popup_height, popup_width, f"{channel.name.upper()} SETTINGS", True)
         common = (
             f"P  Choose preset: {channel.builtin_id or 'custom WAV'}",
             "H  Rename channel     C  Clone channel     X  Delete channel",
-            "W  Load custom WAV (changes this channel to drum)",
+            "W  Load custom WAV/MP3 (changes this channel to drum)",
         )
         synth = (
             f"O  Oscillator: {oscillator}       N  Base note: {note_name(channel.base_note)} ({channel.base_note})",
@@ -512,7 +657,12 @@ class ConsoleSeqUI:
             f"E  Sustain: {sustain:.3f}         R  Release: {release:.3f}s",
             f"F  Tone/filter: {channel.tone:.2f}       G  Drive: {channel.drive:.2f}",
         )
-        lines = common + (() if kind == "DRUM" else synth) + ("Esc/other  Close",)
+        soundfont_lines = (
+            f"FluidSynth bank {channel.soundfont_bank}, program {channel.soundfont_program}",
+            "Per-step pitch/velocity/length are edited in Pattern",
+        )
+        details = synth if kind == "SYNTH" else soundfont_lines if kind == "SOUNDFONT" else ()
+        lines = common + details + ("Esc/other  Close",)
         for row, line in enumerate(lines, start=2):
             self.put(y + row, x + 3, line, curses.A_BOLD if row < len(lines) + 1 else curses.A_DIM, popup_width - 6)
         self.screen.refresh()
@@ -522,8 +672,15 @@ class ConsoleSeqUI:
         if key in (ord("p"), ord("P")):
             preset = self.choose_preset(f"PRESET FOR {channel.name}", channel.builtin_id)
             if preset:
-                self.engine.set_channel_preset(self.channel, preset)
-                self.status = f"Preset changed to {preset}"
+                sample = resolve_sample_id(preset)
+                if sample is None:
+                    self.engine.set_channel_preset(self.channel, preset)
+                    self.status = f"Preset changed to {preset}"
+                elif self.engine.set_channel_sample(self.channel, str(sample)):
+                    self.engine.set_channel_name(self.channel, sample.stem)
+                    self.status = f"Loaded kit sample {sample.name}"
+                else:
+                    self.status = self.engine.last_error()
             return
         if key in (ord("h"), ord("H")):
             name = self.prompt("RENAME CHANNEL", channel.name)
@@ -546,7 +703,7 @@ class ConsoleSeqUI:
         if key in (ord("w"), ord("W")):
             self.sample_dialog()
             return
-        if channel.type == ChannelType.DRUM:
+        if channel.type in (ChannelType.DRUM, ChannelType.SOUNDFONT):
             return
         if key in (ord("o"), ord("O")):
             names = ("SINE", "SQUARE", "SAW", "TRIANGLE")
@@ -576,6 +733,8 @@ class ConsoleSeqUI:
     def choose_preset(self, title: str, current: str = "") -> str | None:
         catalog = [(str(preset_id), str(name), str(category))
                    for preset_id, name, category in self.engine.preset_catalog()]
+        catalog.extend((preset_id, name, category)
+                       for preset_id, name, category, _ in sample_catalog())
         if not catalog:
             self.status = "The engine did not report any instrument presets"
             return None
@@ -640,7 +799,14 @@ class ConsoleSeqUI:
         if not preset:
             return
         try:
-            self.channel = self.engine.add_channel(preset)
+            sample = resolve_sample_id(preset)
+            if sample is None:
+                self.channel = self.engine.add_channel(preset)
+            else:
+                self.channel = self.engine.add_channel("perc_click", sample.stem)
+                if not self.engine.set_channel_sample(self.channel, str(sample)):
+                    self.engine.remove_channel(self.channel)
+                    raise RuntimeError(self.engine.last_error())
             self.status = f"Added channel #{self.channel + 1}: {self.engine.get_channel(self.channel).name}"
         except RuntimeError as error:
             self.status = str(error)
@@ -747,6 +913,36 @@ def smoke_test(output: str | None = None) -> int:
         raise RuntimeError("Offline rendering returned an invalid buffer")
     if max(abs(sample) for sample in audio) <= 0.01:
         raise RuntimeError("Offline rendering produced silence")
+
+    # Exercise packaged assets in the same way as the interactive instrument
+    # browser. This catches missing SF2/DLL/data files in the standalone EXE.
+    probe = Engine()
+    probe.set_asset_root(str(asset_root()))
+    soundfont = default_soundfont()
+    if not soundfont.is_file() or not probe.set_soundfont(str(soundfont)):
+        raise RuntimeError(probe.last_error() or "The bundled SoundFont is missing")
+    for channel in range(probe.channel_count()):
+        probe.set_channel_mute(channel, True)
+    live_channel = probe.add_channel("sf_grand_piano", "Smoke Grand Piano")
+    probe.clear_pattern(0)
+    probe.set_step(0, live_channel, 0, True)
+    probe.set_duration(0, live_channel, 0, 2)
+    live_audio = probe.render_offline(0.25)
+    if max(abs(sample) for sample in live_audio) <= 0.01:
+        raise RuntimeError("FluidSynth rendered silence")
+
+    samples = list(sample_catalog())
+    wav = next((item[3] for item in samples if item[3].suffix.lower() == ".wav"), None)
+    mp3 = next((item[3] for item in samples if item[3].suffix.lower() == ".mp3"), None)
+    if wav is None or mp3 is None:
+        raise RuntimeError("The bundled WAV/MP3 sample library is incomplete")
+    sample_probe = Engine()
+    sample_probe.set_asset_root(str(asset_root()))
+    sample_channel = sample_probe.add_channel("perc_click", "Smoke Sample")
+    for sample_path in (wav, mp3):
+        if not sample_probe.set_channel_sample(sample_channel, str(sample_path)):
+            raise RuntimeError(sample_probe.last_error())
+
     destination = Path(output) if output else Path(tempfile.gettempdir()) / "console_seq_smoke.cseq"
     if not engine.save_project(str(destination)):
         raise RuntimeError(engine.last_error())

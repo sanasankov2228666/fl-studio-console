@@ -16,8 +16,8 @@ int main() {
   assert(engine.get_channel(0).name() == "Kick");
   assert(engine.get_step(0, 0, 0));
   assert(engine.get_step(0, 1, 4));
-  assert(Engine::preset_ids().size() == 60);
-  assert(Engine::preset_catalog().size() == 60);
+  assert(Engine::preset_ids().size() == 100);
+  assert(Engine::preset_catalog().size() == 100);
   engine.set_song_slot_count(48);
   assert(engine.song_slot_count() == 48);
   const int bank_start = engine.add_pattern_bank();
@@ -47,8 +47,10 @@ int main() {
 
   engine.set_step(0, 3, 2, true);
   engine.set_note(0, 3, 2, 64);
+  engine.set_duration(0, 3, 2, 3);
   assert(engine.get_step(0, 3, 2));
   assert(engine.get_note(0, 3, 2) == 64);
+  assert(engine.get_duration(0, 3, 2) == 3);
   engine.set_channel_pan(3, -0.35F);
   engine.set_channel_volume(3, 0.5F);
 
@@ -69,6 +71,7 @@ int main() {
   assert(engine.load_project(file.string()));
   assert(engine.get_step(0, 0, 0));
   assert(engine.get_note(0, 3, 2) == 64);
+  assert(engine.get_duration(0, 3, 2) == 3);
   assert(engine.song_slot_count() == 48);
   assert(engine.pattern_count() == 20);
   std::filesystem::remove(file);

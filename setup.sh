@@ -20,16 +20,21 @@ install_linux_packages() {
   elif ! pkg-config --exists alsa 2>/dev/null; then
     missing+=(libasound2-dev)
   fi
+  if ! command -v pkg-config >/dev/null 2>&1 || ! pkg-config --exists fluidsynth 2>/dev/null; then
+    missing+=(libfluidsynth-dev)
+  fi
   if ((${#missing[@]})); then
     echo "Installing required system packages: ${missing[*]}"
     if command -v sudo >/dev/null 2>&1; then
       sudo apt-get update
       sudo apt-get install -y build-essential python3 python3-venv python3-dev \
         cmake pkg-config libasound2-dev libpulse-dev
+      sudo apt-get install -y libfluidsynth-dev
     else
       apt-get update
       apt-get install -y build-essential python3 python3-venv python3-dev \
         cmake pkg-config libasound2-dev libpulse-dev
+      apt-get install -y libfluidsynth-dev
     fi
   fi
 }
@@ -43,6 +48,7 @@ install_macos_packages() {
   local packages=()
   command -v cmake >/dev/null 2>&1 || packages+=(cmake)
   command -v python3 >/dev/null 2>&1 || packages+=(python)
+  command -v fluidsynth >/dev/null 2>&1 || packages+=(fluid-synth)
   command -v clang++ >/dev/null 2>&1 || xcode-select --install || true
   if ((${#packages[@]})); then brew install "${packages[@]}"; fi
 }
@@ -52,6 +58,20 @@ case "$(uname -s)" in
   Darwin*) install_macos_packages ;;
   *) echo "Use setup.ps1 on Windows." >&2; exit 1 ;;
 esac
+
+soundfont_dir="$ROOT_DIR/assets/soundfonts"
+soundfont_file="$soundfont_dir/GeneralUser-GS.sf2"
+soundfont_license="$soundfont_dir/GeneralUser-GS-LICENSE.txt"
+mkdir -p "$soundfont_dir"
+if [[ ! -f "$soundfont_file" ]] || [[ "$(wc -c < "$soundfont_file")" -lt 20000000 ]]; then
+  echo "Downloading GeneralUser GS SoundFont..."
+  curl -fL --retry 3 -o "$soundfont_file" \
+    https://raw.githubusercontent.com/mrbumpy409/GeneralUser-GS/main/GeneralUser-GS.sf2
+fi
+if [[ ! -f "$soundfont_license" ]]; then
+  curl -fL --retry 3 -o "$soundfont_license" \
+    https://raw.githubusercontent.com/mrbumpy409/GeneralUser-GS/main/documentation/LICENSE.txt
+fi
 
 python3 -m venv "$VENV_DIR"
 "$VENV_DIR/bin/python" -m pip install --upgrade pip
