@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import math
 import tempfile
@@ -12,6 +13,11 @@ from unittest.mock import patch
 from console_seq import ChannelType, Engine, Pattern, Song
 from console_seq.ui import ConsoleSeqUI
 import curses
+
+
+_TEST_MP3 = base64.b64decode(
+    "//tQxAAACkA1PHWTAAFnlax3NNACAUbckNFE0TTJDVGFhDQaOKQ4mjQCQrWHTHUHWOzty4fl4QQBAAEECCAJg+D4Pn4IAhrB8/lAxKe/o9/R7+gpggD5+XAgYwwD76wIGNAPvynv6AAANdQKBQMBQMBQKBgH2ITGA6M4wJA2sRENkyDZxURn0C3uuNsEdAdPgOUSYL1+F2HaMKML/ifCNBdh2jC/+SJkXi8iXf/x6mReLxiXS7/UDQlCQNf8qd//0gBQAYDQBYmA4AWJgywOyf/7UsQHggsoKQy98YABQwShyc/wUICYDOGBmhGxtb+dSapIZBmNCCGJhlASKYL6DxGDZg1Bg7ILUYE2BGJ9NTWLLZcND1ChdemY3Vv0U6tn/q+g5/V1b9On6vTr//3FIBAQwmGTLhmNdtM7NtjDRRVM1XijzNT3FVzDVAeYwY0FDMDTA6zXzQNf2szqawEIFjv5G5YCdeNLMUxWrR9Pdb/1L1aG+j0ft3b/92qv/X3JAAAzB6rMhkwyUaTNasNeVkwcEQ8Mv6hMDLqxCQwZoEnM//tSxBCCCnglFS5/YoF2hSGV/+yQBfARDAIAC02tYOMvTWi8OEnFl17gtl7Fe/1fIZSxvrd6N69mS/uin+ncuc7sV0rejYigUAGAQACxgOoDiYG8B0GDSg8ph6Qu0bILZ2Gw2C8Bh8YQ+YOYC4GB4AiBga4HuYGoDVHBQBioKqRy4YjdvjRQUQBKUV3JxUxsmPs+71adJ9Xb456293t+rj9FVTO1FQAAMgWWTJxbMrn4zwzTaOUMHsE8zNIZp8zMgTXMHBBXjAYgF0wDEAuOCYz/+1LEFYIJkCMTLn9igWqFYYK+MADqdA282DB1p0VtDttd9dH2+vs/36v3a//oT2J/t+pz//6DAFACMwFEC/MFxBPTBQAwgwzIZGN9Wo4zbVzXUx0UUVMPdB1TBMQlcwhkHjMIFB4TAdQKcBAGaI7DIpDgQQlswf7CD5DY/ff6//t0a79fbfo26P6ujui9qNf0KgAAL7bLrvN6Nf8LhB6IaAEplAocjLxE9K4TE3cVNiGK7R/ORzjSvXRN0AOxC0dMirMsLFwDkD5BcpDhczuqHP/7UsQfgBF0+WG5qRAQ1AWjH54wBKBZWRMvkWMSKkVbydGXImK0FAE0RYgRiXfycHPJ8ghFC6kklU9VsiAuMg5PkENEEll0umReL3/fpuggxiXS6kkZLBX6bv/6flDh9AAUSnXL0ULcLkhS5NFZP4epUqY6ma717F1VAVdlst1nemHa3UQ7DvK/q8S/LPo//+Iv8GoNVMQU1FMy4xMDBVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV" + "V"
+)
 
 
 class ConsoleSeqCoreTests(unittest.TestCase):
@@ -78,6 +84,15 @@ class ConsoleSeqCoreTests(unittest.TestCase):
             self.assertGreater(max(abs(value) for value in audio), 0.01)
             self.assertLessEqual(max(abs(value) for value in audio), 1.0)
 
+    def test_load_mp3_and_render(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="ConsoleSeq-mp3-") as directory:
+            mp3_path = Path(directory) / "user sample.mp3"
+            mp3_path.write_bytes(_TEST_MP3)
+            self.assertTrue(self.engine.set_channel_sample(0, str(mp3_path)), self.engine.last_error())
+            self.assertEqual(self.engine.get_channel(0).sample_path, str(mp3_path))
+            audio = self.engine.render_offline(0.18)
+            self.assertGreater(max(abs(value) for value in audio), 0.01)
+
     def test_standalone_api_objects(self) -> None:
         pattern = Pattern(2, 16, "Unit")
         pattern.set_step(1, 7, True)
@@ -136,8 +151,14 @@ class ConsoleSeqCoreTests(unittest.TestCase):
 
     def test_instrument_presets_and_dynamic_channels(self) -> None:
         presets = self.engine.preset_ids()
-        self.assertEqual(len(presets), 22)
-        for required in ("kick_deep", "kick_punch", "kick_808", "bass_saw", "bass_sub", "pad_warm"):
+        self.assertEqual(len(presets), 60)
+        catalog = self.engine.preset_catalog()
+        self.assertEqual(len(catalog), 60)
+        categories = {category for _preset_id, _name, category in catalog}
+        self.assertEqual(categories, {"Pianos", "Kicks", "Basses", "Guitars", "Strings",
+                                      "Synths", "Snares", "Hi-hats", "Percussion", "FX"})
+        for required in ("piano_classic", "guitar_acoustic", "kick_trap_hard",
+                         "bass_808_long", "fm_bell", "perc_newjazz", "fx_riser"):
             self.assertIn(required, presets)
         added = self.engine.add_channel("kick_808", "Extra 808")
         self.assertEqual(added, 5)
@@ -178,7 +199,8 @@ class ConsoleSeqCoreTests(unittest.TestCase):
         self.engine.set_synth_param(added, "tone", 0.21)
         pattern = self.engine.duplicate_pattern(0)
         self.engine.set_pattern_name(pattern, "Chorus")
-        self.engine.set_pattern_at(added, 7, pattern)
+        self.engine.set_song_slot_count(64)
+        self.engine.set_pattern_at(added, 47, pattern)
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "expanded.cseq"
             self.assertTrue(self.engine.save_project(str(path)), self.engine.last_error())
@@ -189,9 +211,30 @@ class ConsoleSeqCoreTests(unittest.TestCase):
             self.assertEqual(restored.get_channel(added).builtin_id, "pad_warm")
             self.assertAlmostEqual(restored.get_channel(added).tone, 0.21, places=4)
             self.assertEqual(restored.get_pattern(pattern).name, "Chorus")
-            self.assertEqual(restored.get_pattern_at(added, 7), pattern)
+            self.assertEqual(restored.song_slot_count(), 64)
+            self.assertEqual(restored.get_pattern_at(added, 47), pattern)
             restored.remove_pattern(pattern)
-            self.assertEqual(restored.get_pattern_at(added, 7), -1)
+            self.assertEqual(restored.get_pattern_at(added, 47), -1)
+
+    def test_atomic_save_overwrite_and_pattern_banks(self) -> None:
+        first = self.engine.add_pattern_bank()
+        self.assertEqual(first, 4)
+        self.assertEqual(self.engine.pattern_count(), 20)
+        self.engine.set_song_slot_count(48)
+        self.engine.set_pattern_at(0, 31, 19)
+        with tempfile.TemporaryDirectory(prefix="ConsoleSeq-save-") as directory:
+            path = Path(directory) / "nested" / "song.cseq"
+            self.assertTrue(self.engine.save_project(str(path)), self.engine.last_error())
+            self.assertFalse(Path(str(path) + ".tmp").exists())
+            self.engine.set_bpm(151)
+            self.assertTrue(self.engine.save_project(str(path)), self.engine.last_error())
+            data = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(data["bpm"], 151)
+            restored = Engine()
+            self.assertTrue(restored.load_project(str(path)), restored.last_error())
+            self.assertEqual(restored.pattern_count(), 20)
+            self.assertEqual(restored.song_slot_count(), 48)
+            self.assertEqual(restored.get_pattern_at(0, 31), 19)
 
     def test_mute_solo_pan_and_song_mode_rendering(self) -> None:
         self.engine.clear_pattern(0)
@@ -330,6 +373,26 @@ class ConsoleSeqUiLogicTests(unittest.TestCase):
             self.ui.draw_channels(3, 50, 12, 18)
             self.ui.draw_song(3, 68, 12, 52)
             self.ui.draw_mixer(15, 0, 8, 120)
+
+    def test_pattern_and_song_bank_navigation(self) -> None:
+        self.ui.handle_key(ord("N"))
+        self.assertEqual(self.ui.engine.pattern_count(), 20)
+        self.assertEqual(self.ui.engine.current_pattern(), 4)
+        self.ui.engine.set_current_pattern(0)
+        self.ui.handle_key(curses.KEY_NPAGE)
+        self.assertEqual(self.ui.engine.current_pattern(), 16)
+        self.ui.handle_key(curses.KEY_PPAGE)
+        self.assertEqual(self.ui.engine.current_pattern(), 0)
+
+        self.ui.engine.set_song_slot_count(48)
+        self.ui.handle_key(9)
+        self.assertEqual(self.ui.focus, "SONG")
+        self.ui.handle_key(curses.KEY_NPAGE)
+        self.assertEqual(self.ui.song_slot, 16)
+        self.ui.handle_key(curses.KEY_NPAGE)
+        self.assertEqual(self.ui.song_slot, 32)
+        self.ui.handle_key(curses.KEY_PPAGE)
+        self.assertEqual(self.ui.song_slot, 16)
 
     def test_song_panel_on_terminal_wider_than_song(self) -> None:
         # Regression: a wide Song panel used its screen capacity as the loop

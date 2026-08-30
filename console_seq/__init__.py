@@ -1,13 +1,20 @@
 """ConsoleSeq terminal DAW."""
 
-from .core import BUFFER_FRAMES, SAMPLE_RATE, Channel, ChannelType, Engine, Oscillator, Pattern, Song
+from .core import (
+    BUFFER_FRAMES,
+    SAMPLE_RATE,
+    Channel,
+    ChannelType,
+    Engine,
+    Oscillator,
+    Pattern,
+    Song,
+    _native,
+)
 
 __all__ = [
     "BUFFER_FRAMES", "SAMPLE_RATE", "Channel", "ChannelType", "Engine",
     "Oscillator", "Pattern", "Song",
 ]
 
-try:
-    from .console_seq_core import __version__
-except ImportError:
-    __version__ = "development"
+__version__ = getattr(_native, "__version__", "development")

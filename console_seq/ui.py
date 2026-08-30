@@ -14,19 +14,7 @@ from .core import ChannelType, Engine
 
 FOCUSES = ("PATTERN", "SONG", "MIXER")
 NOTE_NAMES = ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
-PRESET_INFO = (
-    ("kick_deep", "DRUM", "Deep Kick"), ("kick_punch", "DRUM", "Punch Kick"),
-    ("kick_808", "DRUM", "808 Kick"), ("snare_tight", "DRUM", "Tight Snare"),
-    ("snare_big", "DRUM", "Big Snare"), ("clap", "DRUM", "Hand Clap"),
-    ("hihat_closed", "DRUM", "Closed Hat"), ("hihat_open", "DRUM", "Open Hat"),
-    ("tom_low", "DRUM", "Low Tom"), ("tom_high", "DRUM", "High Tom"),
-    ("perc_click", "DRUM", "Perc Click"), ("piano_bright", "KEYS", "Bright Piano"),
-    ("piano_soft", "KEYS", "Soft Piano"), ("electric_keys", "KEYS", "Electric Keys"),
-    ("bass_saw", "BASS", "Saw Bass"), ("bass_square", "BASS", "Square Bass"),
-    ("bass_sub", "BASS", "Sub Bass"), ("bass_pluck", "BASS", "Pluck Bass"),
-    ("lead_saw", "SYNTH", "Saw Lead"), ("lead_square", "SYNTH", "Square Lead"),
-    ("pad_warm", "SYNTH", "Warm Pad"), ("pluck", "SYNTH", "Synth Pluck"),
-)
+PATTERN_BANK_SIZE = 16
 
 
 def note_name(note: int) -> str:
@@ -70,7 +58,10 @@ class ConsoleSeqUI:
         try:
             while self.running:
                 self.draw()
-                self.handle_key(self.screen.getch())
+                try:
+                    self.handle_key(self.screen.getch())
+                except (RuntimeError, ValueError, IndexError) as error:
+                    self.status = f"Operation failed: {error}"
         finally:
             self.engine.shutdown()
 
@@ -148,8 +139,8 @@ class ConsoleSeqUI:
         self.draw_mixer(body_y + upper_height, 0, mixer_height, width)
 
         hint = {
-            "PATTERN": "Arrows move | Space step | [ ] semitone | { } octave | ; ' velocity | N/B/R/X patterns",
-            "SONG": "Arrows move | Space cycles | 1-9 assign | G exact pattern | Backspace empty",
+            "PATTERN": "Arrows move | PgUp/PgDn bank | n new | N +16 | B/R/X pattern | Enter channel",
+            "SONG": "Arrows move | PgUp/PgDn slots | Space cycles | 1-9/G assign | Backspace empty",
             "MIXER": "PgUp/PgDn channel | Up/Down volume | Left/Right pan | M mute | O solo",
         }[self.focus]
         self.put(status_y, 0, " " * max(0, width - 1), curses.A_REVERSE)
@@ -159,7 +150,11 @@ class ConsoleSeqUI:
 
     def draw_pattern(self, y: int, x: int, height: int, width: int) -> None:
         pattern = self.engine.get_pattern(self.engine.current_pattern())
-        self.box(y, x, height, width, f"PATTERN {self.engine.current_pattern() + 1}: {pattern.name}", self.focus == "PATTERN")
+        bank = self.engine.current_pattern() // PATTERN_BANK_SIZE + 1
+        banks = (self.engine.pattern_count() + PATTERN_BANK_SIZE - 1) // PATTERN_BANK_SIZE
+        self.box(y, x, height, width,
+                 f"PATTERN {self.engine.current_pattern() + 1}: {pattern.name} [{bank}/{banks}]",
+                 self.focus == "PATTERN")
         cell_width = 2 if width < 52 else 3
         grid_x = x + max(9, width - pattern.step_count * cell_width - 2)
         visible_steps = min(pattern.step_count, max(1, (x + width - 1 - grid_x) // cell_width))
@@ -202,10 +197,12 @@ class ConsoleSeqUI:
             self.put(y + 1 + index - channel_start, x + 1, f"{marker}{key:<3} {channel.name:<7} {flags}", attr, width - 2)
 
     def draw_song(self, y: int, x: int, height: int, width: int) -> None:
-        self.box(y, x, height, width, "SONG", self.focus == "SONG")
+        slot_count = self.engine.song_slot_count()
+        bank = self.song_slot // PATTERN_BANK_SIZE + 1
+        banks = (slot_count + PATTERN_BANK_SIZE - 1) // PATTERN_BANK_SIZE
+        self.box(y, x, height, width, f"SONG SLOTS [{bank}/{banks}] TOTAL {slot_count}", self.focus == "SONG")
         cell_width = 3
         label_width = 5 if width >= 16 else 1
-        slot_count = self.engine.song_slot_count()
         if slot_count <= 0:
             return
         # A wide terminal can fit more cells than the song owns. Never let the
@@ -306,10 +303,14 @@ class ConsoleSeqUI:
             self.copy_pattern()
         elif key in (ord("v"), ord("V")) and self.focus == "PATTERN":
             self.paste_pattern()
-        elif key in (ord("n"), ord("N")) and self.focus == "PATTERN":
+        elif key == ord("n") and self.focus == "PATTERN":
             index = self.engine.add_pattern()
             self.engine.set_current_pattern(index)
             self.status = f"Created Pattern {index + 1}"
+        elif key == ord("N") and self.focus == "PATTERN":
+            index = self.engine.add_pattern_bank(PATTERN_BANK_SIZE)
+            self.engine.set_current_pattern(index)
+            self.status = f"Added Patterns {index + 1}-{index + PATTERN_BANK_SIZE}"
         elif key in (ord("b"), ord("B")) and self.focus == "PATTERN":
             index = self.engine.duplicate_pattern(self.engine.current_pattern())
             self.engine.set_current_pattern(index)
@@ -340,7 +341,16 @@ class ConsoleSeqUI:
 
     def handle_focus_key(self, key: int) -> None:
         if self.focus == "PATTERN":
-            if key == curses.KEY_LEFT:
+            if key == curses.KEY_PPAGE:
+                target = max(0, self.engine.current_pattern() - PATTERN_BANK_SIZE)
+                self.engine.set_current_pattern(target)
+                self.status = f"Pattern bank {target // PATTERN_BANK_SIZE + 1}"
+            elif key == curses.KEY_NPAGE:
+                target = min(self.engine.pattern_count() - 1,
+                             self.engine.current_pattern() + PATTERN_BANK_SIZE)
+                self.engine.set_current_pattern(target)
+                self.status = f"Pattern bank {target // PATTERN_BANK_SIZE + 1}"
+            elif key == curses.KEY_LEFT:
                 self.step = (self.step - 1) % self.engine.step_count()
             elif key == curses.KEY_RIGHT:
                 self.step = (self.step + 1) % self.engine.step_count()
@@ -377,7 +387,16 @@ class ConsoleSeqUI:
                 except (ValueError, IndexError):
                     self.status = f"Pattern number must be 1..{self.engine.pattern_count()}"
         elif self.focus == "SONG":
-            if key == curses.KEY_LEFT:
+            if key == curses.KEY_PPAGE:
+                self.song_slot = max(0, self.song_slot - PATTERN_BANK_SIZE)
+                self.status = f"Song slots {self.song_slot // PATTERN_BANK_SIZE * PATTERN_BANK_SIZE + 1}-" \
+                              f"{min(self.engine.song_slot_count(), (self.song_slot // PATTERN_BANK_SIZE + 1) * PATTERN_BANK_SIZE)}"
+            elif key == curses.KEY_NPAGE:
+                self.song_slot = min(self.engine.song_slot_count() - 1,
+                                     self.song_slot + PATTERN_BANK_SIZE)
+                self.status = f"Song slots {self.song_slot // PATTERN_BANK_SIZE * PATTERN_BANK_SIZE + 1}-" \
+                              f"{min(self.engine.song_slot_count(), (self.song_slot // PATTERN_BANK_SIZE + 1) * PATTERN_BANK_SIZE)}"
+            elif key == curses.KEY_LEFT:
                 self.song_slot = (self.song_slot - 1) % self.engine.song_slot_count()
             elif key == curses.KEY_RIGHT:
                 self.song_slot = (self.song_slot + 1) % self.engine.song_slot_count()
@@ -530,9 +549,9 @@ class ConsoleSeqUI:
         if channel.type == ChannelType.DRUM:
             return
         if key in (ord("o"), ord("O")):
-            names = ("SINE", "SQUARE", "SAW")
+            names = ("SINE", "SQUARE", "SAW", "TRIANGLE")
             current = names.index(oscillator) if oscillator in names else 0
-            self.engine.set_synth_param(self.channel, "oscillator", float((current + 1) % 3))
+            self.engine.set_synth_param(self.channel, "oscillator", float((current + 1) % len(names)))
             self.status = f"{channel.name} oscillator changed"
             return
         fields = {
@@ -555,39 +574,60 @@ class ConsoleSeqUI:
                 self.status = f"Invalid numeric value: {value}"
 
     def choose_preset(self, title: str, current: str = "") -> str | None:
-        supported = set(self.engine.preset_ids())
-        choices = [item for item in PRESET_INFO if item[0] in supported]
-        if not choices:
+        catalog = [(str(preset_id), str(name), str(category))
+                   for preset_id, name, category in self.engine.preset_catalog()]
+        if not catalog:
             self.status = "The engine did not report any instrument presets"
             return None
-        selected = next((index for index, item in enumerate(choices) if item[0] == current), 0)
+        categories = list(dict.fromkeys(item[2] for item in catalog))
+        current_entry = next((item for item in catalog if item[0] == current), None)
+        category_index = categories.index(current_entry[2]) if current_entry else 0
+        selected_by_category = {category: 0 for category in categories}
+        if current_entry:
+            current_items = [item for item in catalog if item[2] == current_entry[2]]
+            selected_by_category[current_entry[2]] = current_items.index(current_entry)
         height, width = self.screen.getmaxyx()
-        popup_width = min(58, width - 4)
+        popup_width = min(72, width - 4)
         popup_height = min(18, height - 2)
-        visible = max(1, popup_height - 4)
+        visible = max(1, popup_height - 5)
         y, x = max(1, (height - popup_height) // 2), max(1, (width - popup_width) // 2)
         self.screen.timeout(-1)
         try:
             while True:
                 self.box(y, x, popup_height, popup_width, title, True)
+                category = categories[category_index]
+                choices = [item for item in catalog if item[2] == category]
+                selected = selected_by_category[category]
                 start = min(max(0, selected - visible + 1), max(0, len(choices) - visible))
+                previous_category = categories[(category_index - 1) % len(categories)]
+                next_category = categories[(category_index + 1) % len(categories)]
+                self.put(y + 1, x + 2, " " * (popup_width - 4), 0, popup_width - 4)
+                self.put(y + 1, x + 2,
+                         f"< {previous_category} | [{category}] {category_index + 1}/{len(categories)} | {next_category} >",
+                         curses.color_pair(4) | curses.A_BOLD, popup_width - 4)
                 for row in range(visible):
                     index = start + row
-                    self.put(y + 1 + row, x + 1, " " * (popup_width - 2), 0, popup_width - 2)
+                    self.put(y + 2 + row, x + 1, " " * (popup_width - 2), 0, popup_width - 2)
                     if index >= len(choices):
                         continue
-                    preset_id, category, label = choices[index]
+                    preset_id, label, _ = choices[index]
                     marker = ">" if index == selected else " "
                     attr = curses.color_pair(1) | curses.A_BOLD if index == selected else 0
-                    self.put(y + 1 + row, x + 2,
-                             f"{marker} [{category:<5}] {label:<18} {preset_id}", attr, popup_width - 4)
-                self.put(y + popup_height - 2, x + 2, "Up/Down choose | Enter apply | Esc cancel", curses.A_DIM, popup_width - 4)
+                    self.put(y + 2 + row, x + 2,
+                             f"{marker} {label:<26} {preset_id}", attr, popup_width - 4)
+                self.put(y + popup_height - 2, x + 2,
+                         "Left/Right category | Up/Down sound | Enter | Esc",
+                         curses.A_DIM, popup_width - 4)
                 self.screen.refresh()
                 key = self.screen.getch()
                 if key == curses.KEY_UP:
-                    selected = (selected - 1) % len(choices)
+                    selected_by_category[category] = (selected - 1) % len(choices)
                 elif key == curses.KEY_DOWN:
-                    selected = (selected + 1) % len(choices)
+                    selected_by_category[category] = (selected + 1) % len(choices)
+                elif key == curses.KEY_LEFT:
+                    category_index = (category_index - 1) % len(categories)
+                elif key in (curses.KEY_RIGHT, 9):
+                    category_index = (category_index + 1) % len(categories)
                 elif key in (10, 13, curses.KEY_ENTER):
                     return choices[selected][0]
                 elif key in (27, ord("q"), ord("Q")):
@@ -614,7 +654,7 @@ class ConsoleSeqUI:
             path = path.with_suffix(".cseq")
         if self.engine.save_project(str(path)):
             self.project_file = path
-            self.status = f"Saved {path}"
+            self.status = f"Saved {path.resolve()}"
         else:
             self.status = f"Save failed: {self.engine.last_error()}"
 
@@ -628,21 +668,38 @@ class ConsoleSeqUI:
             self.status = f"Load failed: {self.engine.last_error()}"
 
     def sample_dialog(self) -> None:
-        value = self.prompt(f"LOAD WAV FOR {self.engine.get_channel(self.channel).name}")
+        value = self.prompt(f"LOAD WAV/MP3 FOR {self.engine.get_channel(self.channel).name}")
         if value and self.engine.set_channel_sample(self.channel, value):
             self.status = f"Loaded sample {value}"
         elif value:
             self.status = self.engine.last_error()
 
+    def song_length_dialog(self) -> None:
+        current = self.engine.song_slot_count()
+        value = self.prompt("SONG LENGTH IN SLOTS (1-512)", str(current))
+        if value is None:
+            return
+        try:
+            requested = int(value)
+            if requested < current and not self.confirm(
+                    f"Shrink Song to {requested}? Later slots are lost?"):
+                return
+            self.engine.set_song_slot_count(requested)
+            self.song_slot = min(self.song_slot, requested - 1)
+            self.status = f"Song length changed to {requested} slots"
+        except (ValueError, RuntimeError) as error:
+            self.status = f"Song length must be 1..512: {error}"
+
     def menu(self) -> None:
         height, width = self.screen.getmaxyx()
         popup_width = min(48, width - 4)
-        y, x = max(1, height // 2 - 6), max(1, (width - popup_width) // 2)
-        self.box(y, x, 13, popup_width, "MAIN MENU", True)
+        y, x = max(1, height // 2 - 7), max(1, (width - popup_width) // 2)
+        self.box(y, x, 14, popup_width, "MAIN MENU", True)
         options: Iterable[str] = (
             "N  New project", "O  Open project", "S  Save project",
             "I  Add instrument/channel", "E  Selected channel settings",
-            "W  Load WAV on selected channel", "Z  Cycle 16/32/64 steps",
+            "W  Load WAV/MP3", "Y  Set Song length (1-512 slots)",
+            "Z  Cycle 16/32/64 pattern steps",
             "R  Resume", "Q  Exit",
         )
         for row, option in enumerate(options, start=2):
@@ -664,6 +721,8 @@ class ConsoleSeqUI:
             self.instrument_dialog()
         elif key in (ord("w"), ord("W")):
             self.sample_dialog()
+        elif key in (ord("y"), ord("Y")):
+            self.song_length_dialog()
         elif key in (ord("z"), ord("Z")):
             sizes = (16, 32, 64)
             current = self.engine.step_count()
@@ -679,17 +738,23 @@ class ConsoleSeqUI:
 
 def smoke_test(output: str | None = None) -> int:
     engine = Engine()
-    assert engine.channel_count() == 5
-    assert engine.pattern_count() >= 4
-    assert engine.get_step(0, 0, 0)
+    if engine.channel_count() != 5 or engine.pattern_count() < 4:
+        raise RuntimeError("The default project was not initialized correctly")
+    if not engine.get_step(0, 0, 0):
+        raise RuntimeError("The default demo beat is missing")
     audio = engine.render_offline(0.25)
-    assert len(audio) == int(44100 * 0.25) * 2
-    assert max(abs(sample) for sample in audio) > 0.01
+    if len(audio) != int(44100 * 0.25) * 2:
+        raise RuntimeError("Offline rendering returned an invalid buffer")
+    if max(abs(sample) for sample in audio) <= 0.01:
+        raise RuntimeError("Offline rendering produced silence")
     destination = Path(output) if output else Path(tempfile.gettempdir()) / "console_seq_smoke.cseq"
-    assert engine.save_project(str(destination)), engine.last_error()
+    if not engine.save_project(str(destination)):
+        raise RuntimeError(engine.last_error())
     engine.clear_pattern(0)
-    assert engine.load_project(str(destination)), engine.last_error()
-    assert engine.get_step(0, 0, 0)
+    if not engine.load_project(str(destination)):
+        raise RuntimeError(engine.last_error())
+    if not engine.get_step(0, 0, 0):
+        raise RuntimeError("Saved pattern did not survive the round trip")
     print(f"ConsoleSeq smoke test passed; project: {destination}")
     return 0
 

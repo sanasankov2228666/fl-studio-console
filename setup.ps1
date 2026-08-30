@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-    [switch]$SkipTests
+    [switch]$SkipTests,
+    [switch]$SkipExe
 )
 
 $ErrorActionPreference = "Stop"
@@ -151,7 +152,12 @@ if ($LASTEXITCODE -ne 0) { throw "C++ build failed." }
 $NativeModule = Get-ChildItem -Path (Join-Path $BuildDir "python") -Filter "console_seq_core*.pyd" |
     Select-Object -First 1
 if (-not $NativeModule) { throw "The built Python module was not found." }
-Copy-Item -LiteralPath $NativeModule.FullName -Destination (Join-Path $ProjectRoot "console_seq") -Force
+$stagedModule = Join-Path (Join-Path $ProjectRoot "console_seq") $NativeModule.Name
+try {
+    Copy-Item -LiteralPath $NativeModule.FullName -Destination $stagedModule -Force
+} catch [System.IO.IOException] {
+    Write-Warning "The staged module is open in a running ConsoleSeq process. Tests will use the fresh module from build-win; close the old app before packaging."
+}
 foreach ($runtimeName in @("libgcc_s_seh-1.dll", "libstdc++-6.dll", "libwinpthread-1.dll")) {
     $runtimePath = Join-Path $CompilerBin $runtimeName
     if (Test-Path $runtimePath) {
@@ -169,6 +175,13 @@ if (-not $SkipTests) {
     if ($LASTEXITCODE -ne 0) { throw "Python integration tests failed." }
 }
 
+if (-not $SkipExe) {
+    & (Join-Path $ProjectRoot "build_exe.ps1")
+    if ($LASTEXITCODE -ne 0) { throw "Standalone executable build failed." }
+}
+
 Write-Host ""
 Write-Host "ConsoleSeq is ready. Run:"
+Write-Host "  .\ConsoleSeq.exe"
+Write-Host "or from source:"
 Write-Host "  .\run.cmd"

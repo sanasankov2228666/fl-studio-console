@@ -7,6 +7,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <vector>
 
 #ifdef CONSOLESEQ_WITH_AUDIO
@@ -19,9 +20,12 @@ constexpr unsigned int kSampleRate = 44100;
 constexpr unsigned int kDefaultBufferFrames = 512;
 constexpr int kDefaultSteps = 16;
 constexpr int kDefaultSongSlots = 16;
+constexpr int kMaxChannels = 32;
+constexpr int kMaxPatterns = 512;
+constexpr int kMaxSongSlots = 512;
 
 enum class ChannelType { Drum, Piano, Bass, Synth };
-enum class Oscillator { Sine, Square, Saw };
+enum class Oscillator { Sine, Square, Saw, Triangle };
 
 struct Step {
   bool active{false};
@@ -119,6 +123,7 @@ class Song {
   int get_pattern_at(int channel, int slot) const;
   void clear();
   void resize_channels(int count);
+  void resize_slots(int count);
   int channel_count() const;
   int slot_count() const;
 
@@ -177,6 +182,7 @@ class Engine {
   int step_count() const;
   int song_slot_count() const;
   void set_step_count(int count);
+  void set_song_slot_count(int count);
   Channel get_channel(int index) const;
   Pattern get_pattern(int index) const;
   Song get_song() const;
@@ -189,6 +195,7 @@ class Engine {
   void set_velocity(int pattern, int channel, int step, float velocity);
   void clear_pattern(int pattern);
   int add_pattern(const std::string& name = "");
+  int add_pattern_bank(int count = 16);
   int duplicate_pattern(int pattern);
   void remove_pattern(int pattern);
   void set_pattern_name(int pattern, const std::string& name);
@@ -211,6 +218,7 @@ class Engine {
   std::vector<float> render_offline(float seconds);
   static std::string version();
   static std::vector<std::string> preset_ids();
+  static std::vector<std::tuple<std::string, std::string, std::string>> preset_catalog();
 
  private:
   struct Voice {

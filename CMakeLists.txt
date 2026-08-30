@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.18)
 
-project(ConsoleSeq VERSION 1.1.0 LANGUAGES CXX)
+project(ConsoleSeq VERSION 1.2.0 LANGUAGES CXX)
 
 option(CONSOLESEQ_WITH_AUDIO "Build RtAudio real-time output" ON)
 option(CONSOLESEQ_WITH_SNDFILE "Build libsndfile sample loading" ON)
@@ -26,6 +26,13 @@ FetchContent_Declare(
   DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 )
 FetchContent_MakeAvailable(pybind11 nlohmann_json)
+
+FetchContent_Declare(
+  dr_libs
+  URL https://github.com/mackron/dr_libs/archive/refs/tags/mp3-0.7.3.tar.gz
+  DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+)
+FetchContent_MakeAvailable(dr_libs)
 
 if(CONSOLESEQ_WITH_AUDIO)
   set(RTAUDIO_BUILD_TESTING OFF CACHE BOOL "" FORCE)
@@ -57,8 +64,10 @@ endif()
 
 add_library(console_seq_engine STATIC
   src/console_seq.cpp
+  src/instrument_presets.cpp
 )
 target_include_directories(console_seq_engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_include_directories(console_seq_engine PRIVATE ${dr_libs_SOURCE_DIR})
 target_link_libraries(console_seq_engine PUBLIC nlohmann_json::nlohmann_json)
 target_compile_definitions(console_seq_engine PUBLIC CONSOLESEQ_VERSION="${PROJECT_VERSION}")
 

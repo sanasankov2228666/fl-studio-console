@@ -23,6 +23,7 @@ PYBIND11_MODULE(console_seq_core, module) {
       .value("SINE", Oscillator::Sine)
       .value("SQUARE", Oscillator::Square)
       .value("SAW", Oscillator::Saw)
+      .value("TRIANGLE", Oscillator::Triangle)
       .export_values();
 
   py::class_<Pattern>(module, "Pattern")
@@ -66,6 +67,7 @@ PYBIND11_MODULE(console_seq_core, module) {
       .def("set_pattern_at", &Song::set_pattern_at)
       .def("get_pattern_at", &Song::get_pattern_at)
       .def("clear", &Song::clear)
+      .def("resize_slots", &Song::resize_slots)
       .def_property_readonly("channel_count", &Song::channel_count)
       .def_property_readonly("slot_count", &Song::slot_count);
 
@@ -98,6 +100,7 @@ PYBIND11_MODULE(console_seq_core, module) {
       .def("step_count", &Engine::step_count)
       .def("song_slot_count", &Engine::song_slot_count)
       .def("set_step_count", &Engine::set_step_count)
+      .def("set_song_slot_count", &Engine::set_song_slot_count)
       .def("get_channel", &Engine::get_channel)
       .def("get_pattern", &Engine::get_pattern)
       .def("get_song", &Engine::get_song)
@@ -109,6 +112,7 @@ PYBIND11_MODULE(console_seq_core, module) {
       .def("set_velocity", &Engine::set_velocity)
       .def("clear_pattern", &Engine::clear_pattern)
       .def("add_pattern", &Engine::add_pattern, py::arg("name") = "")
+      .def("add_pattern_bank", &Engine::add_pattern_bank, py::arg("count") = 16)
       .def("duplicate_pattern", &Engine::duplicate_pattern)
       .def("remove_pattern", &Engine::remove_pattern)
       .def("set_pattern_name", &Engine::set_pattern_name)
@@ -128,5 +132,6 @@ PYBIND11_MODULE(console_seq_core, module) {
       .def("set_synth_param", &Engine::set_synth_param)
       .def("render_offline", &Engine::render_offline)
       .def_static("version", &Engine::version)
-      .def_static("preset_ids", &Engine::preset_ids);
+      .def_static("preset_ids", &Engine::preset_ids)
+      .def_static("preset_catalog", &Engine::preset_catalog);
 }

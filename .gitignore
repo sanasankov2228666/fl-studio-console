@@ -5,6 +5,9 @@
 /build/
 /build-win/
 /build-unix/
+/dist/
+/pyinstaller-build/
+/ConsoleSeq.exe
 *.pyd
 *.so
 *.dylib

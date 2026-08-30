@@ -16,7 +16,13 @@ int main() {
   assert(engine.get_channel(0).name() == "Kick");
   assert(engine.get_step(0, 0, 0));
   assert(engine.get_step(0, 1, 4));
-  assert(Engine::preset_ids().size() == 22);
+  assert(Engine::preset_ids().size() == 60);
+  assert(Engine::preset_catalog().size() == 60);
+  engine.set_song_slot_count(48);
+  assert(engine.song_slot_count() == 48);
+  const int bank_start = engine.add_pattern_bank();
+  assert(bank_start == 4);
+  assert(engine.pattern_count() == 20);
 
   const int extra = engine.add_channel("kick_808");
   assert(extra == 5);
@@ -56,11 +62,15 @@ int main() {
 
   const auto file = std::filesystem::current_path() / "native_test_project.cseq";
   assert(engine.save_project(file.string()));
+  assert(!std::filesystem::exists(file.string() + ".tmp"));
+  assert(engine.save_project(file.string()));
   engine.clear_pattern(0);
   assert(!engine.get_step(0, 0, 0));
   assert(engine.load_project(file.string()));
   assert(engine.get_step(0, 0, 0));
   assert(engine.get_note(0, 3, 2) == 64);
+  assert(engine.song_slot_count() == 48);
+  assert(engine.pattern_count() == 20);
   std::filesystem::remove(file);
 
   std::cout << "ConsoleSeq native tests passed\n";

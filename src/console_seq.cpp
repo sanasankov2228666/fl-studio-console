@@ -1,4 +1,5 @@
 #include "console_seq.hpp"
+#include "instrument_presets.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -10,7 +11,17 @@
 #include <stdexcept>
 #include <utility>
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 #include <nlohmann/json.hpp>
+
+#define DR_MP3_IMPLEMENTATION
+#include <dr_mp3.h>
 
 #ifdef CONSOLESEQ_WITH_SNDFILE
 #include <sndfile.h>
@@ -50,6 +61,7 @@ const char* oscillator_name(Oscillator oscillator) {
     case Oscillator::Sine: return "sine";
     case Oscillator::Square: return "square";
     case Oscillator::Saw: return "saw";
+    case Oscillator::Triangle: return "triangle";
   }
   return "sine";
 }
@@ -57,58 +69,8 @@ const char* oscillator_name(Oscillator oscillator) {
 Oscillator oscillator_from_name(const std::string& value) {
   if (value == "square") return Oscillator::Square;
   if (value == "saw") return Oscillator::Saw;
+  if (value == "triangle") return Oscillator::Triangle;
   return Oscillator::Sine;
-}
-
-struct PresetDefinition {
-  const char* id;
-  const char* name;
-  ChannelType type;
-  Oscillator oscillator;
-  int base_note;
-  float attack;
-  float decay;
-  float sustain;
-  float release;
-  float volume;
-  float tone;
-  float drive;
-};
-
-constexpr std::array<PresetDefinition, 22> kPresets{{
-    {"kick_deep", "Deep Kick", ChannelType::Drum, Oscillator::Sine, 36, .001F, .1F, 0.F, .1F, .88F, .45F, .10F},
-    {"kick_punch", "Punch Kick", ChannelType::Drum, Oscillator::Sine, 36, .001F, .1F, 0.F, .1F, .90F, .72F, .22F},
-    {"kick_808", "808 Kick", ChannelType::Drum, Oscillator::Sine, 36, .001F, .1F, 0.F, .1F, .82F, .35F, .30F},
-    {"snare_tight", "Tight Snare", ChannelType::Drum, Oscillator::Sine, 38, .001F, .1F, 0.F, .1F, .68F, .70F, .08F},
-    {"snare_big", "Big Snare", ChannelType::Drum, Oscillator::Sine, 38, .001F, .1F, 0.F, .1F, .62F, .58F, .15F},
-    {"clap", "Hand Clap", ChannelType::Drum, Oscillator::Sine, 39, .001F, .1F, 0.F, .1F, .58F, .82F, .05F},
-    {"hihat_closed", "Closed Hat", ChannelType::Drum, Oscillator::Sine, 42, .001F, .1F, 0.F, .1F, .44F, .78F, .02F},
-    {"hihat_open", "Open Hat", ChannelType::Drum, Oscillator::Sine, 46, .001F, .1F, 0.F, .1F, .38F, .85F, .02F},
-    {"tom_low", "Low Tom", ChannelType::Drum, Oscillator::Sine, 45, .001F, .1F, 0.F, .1F, .64F, .42F, .08F},
-    {"tom_high", "High Tom", ChannelType::Drum, Oscillator::Sine, 50, .001F, .1F, 0.F, .1F, .58F, .62F, .06F},
-    {"perc_click", "Perc Click", ChannelType::Drum, Oscillator::Sine, 56, .001F, .1F, 0.F, .1F, .48F, .92F, .12F},
-    {"piano_bright", "Bright Piano", ChannelType::Piano, Oscillator::Sine, 60, .003F, .22F, .18F, .22F, .42F, .88F, .02F},
-    {"piano_soft", "Soft Piano", ChannelType::Piano, Oscillator::Sine, 60, .012F, .38F, .25F, .40F, .44F, .42F, .00F},
-    {"electric_keys", "Electric Keys", ChannelType::Piano, Oscillator::Sine, 60, .008F, .52F, .32F, .55F, .40F, .62F, .08F},
-    {"bass_saw", "Saw Bass", ChannelType::Bass, Oscillator::Saw, 36, .010F, .20F, .30F, .16F, .56F, .60F, .10F},
-    {"bass_square", "Square Bass", ChannelType::Bass, Oscillator::Square, 36, .006F, .16F, .38F, .18F, .50F, .45F, .18F},
-    {"bass_sub", "Sub Bass", ChannelType::Bass, Oscillator::Sine, 36, .018F, .28F, .58F, .32F, .64F, .24F, .06F},
-    {"bass_pluck", "Pluck Bass", ChannelType::Bass, Oscillator::Saw, 40, .002F, .11F, .12F, .10F, .54F, .76F, .24F},
-    {"lead_saw", "Saw Lead", ChannelType::Synth, Oscillator::Saw, 72, .012F, .18F, .58F, .24F, .35F, .82F, .12F},
-    {"lead_square", "Square Lead", ChannelType::Synth, Oscillator::Square, 72, .006F, .14F, .52F, .20F, .32F, .66F, .08F},
-    {"pad_warm", "Warm Pad", ChannelType::Synth, Oscillator::Saw, 60, .38F, .70F, .72F, 1.20F, .28F, .32F, .04F},
-    {"pluck", "Synth Pluck", ChannelType::Synth, Oscillator::Square, 67, .002F, .09F, .08F, .12F, .38F, .72F, .16F},
-}};
-
-const PresetDefinition* find_preset(std::string id) {
-  if (id == "kick") id = "kick_punch";
-  if (id == "snare") id = "snare_tight";
-  if (id == "hihat") id = "hihat_closed";
-  if (id == "piano") id = "piano_bright";
-  if (id == "bass") id = "bass_saw";
-  const auto found = std::find_if(kPresets.begin(), kPresets.end(),
-      [&](const PresetDefinition& preset) { return id == preset.id; });
-  return found == kPresets.end() ? nullptr : &*found;
 }
 
 json step_to_json(const Step& step) {
@@ -121,6 +83,60 @@ Step step_from_json(const json& value, int fallback_note) {
   step.note = clamp_note(value.value("note", fallback_note));
   step.velocity = clampf(value.value("velocity", 1.0F), 0.0F, 1.0F);
   return step;
+}
+
+void replace_file_atomically(const std::filesystem::path& temporary,
+                             const std::filesystem::path& destination) {
+#ifdef _WIN32
+  if (!MoveFileExW(temporary.c_str(), destination.c_str(),
+                   MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+    const auto error = GetLastError();
+    std::error_code ignored;
+    std::filesystem::remove(temporary, ignored);
+    throw std::runtime_error("could not replace project file (Windows error " +
+                             std::to_string(error) + ")");
+  }
+#else
+  std::error_code error;
+  std::filesystem::rename(temporary, destination, error);
+  if (error) {
+    const auto message = error.message();
+    std::error_code ignored;
+    std::filesystem::remove(temporary, ignored);
+    throw std::runtime_error("could not replace project file: " + message);
+  }
+#endif
+}
+
+std::shared_ptr<const std::vector<float>> convert_to_engine_sample(
+    const float* interleaved, std::uint64_t frames, int channels, int sample_rate) {
+  if (!interleaved || frames < 1 || channels < 1 || sample_rate < 1) return {};
+  constexpr std::uint64_t kMaximumDecodedFrames = 44100ULL * 60ULL * 10ULL;
+  if (frames > kMaximumDecodedFrames) return {};
+  std::vector<float> mono(static_cast<std::size_t>(frames));
+  for (std::uint64_t frame = 0; frame < frames; ++frame) {
+    float sum = 0.0F;
+    for (int channel = 0; channel < channels; ++channel) {
+      sum += interleaved[static_cast<std::size_t>(frame) * static_cast<std::size_t>(channels) +
+                         static_cast<std::size_t>(channel)];
+    }
+    mono[static_cast<std::size_t>(frame)] = sum / static_cast<float>(channels);
+  }
+  if (sample_rate == static_cast<int>(kSampleRate)) {
+    return std::make_shared<const std::vector<float>>(std::move(mono));
+  }
+  const auto output_size = static_cast<std::size_t>(std::ceil(
+      static_cast<double>(mono.size()) * kSampleRate / sample_rate));
+  auto output = std::make_shared<std::vector<float>>(output_size);
+  const double ratio = static_cast<double>(sample_rate) / kSampleRate;
+  for (std::size_t index = 0; index < output_size; ++index) {
+    const double position = index * ratio;
+    const std::size_t left = std::min(static_cast<std::size_t>(position), mono.size() - 1);
+    const std::size_t right = std::min(left + 1, mono.size() - 1);
+    const float fraction = static_cast<float>(position - static_cast<double>(left));
+    (*output)[index] = mono[left] + (mono[right] - mono[left]) * fraction;
+  }
+  return output;
 }
 
 }  // namespace
@@ -246,7 +262,7 @@ void Channel::set_synth_param(const std::string& parameter, float value) {
   else if (parameter == "drive") drive_ = clampf(value, 0.0F, 1.0F);
   else if (parameter == "base_note") base_note_ = clamp_note(static_cast<int>(std::lround(value)));
   else if (parameter == "oscillator") {
-    const int index = std::max(0, std::min(2, static_cast<int>(std::lround(value))));
+    const int index = std::max(0, std::min(3, static_cast<int>(std::lround(value))));
     oscillator_ = static_cast<Oscillator>(index);
   } else {
     throw std::invalid_argument("Unknown synthesizer parameter: " + parameter);
@@ -286,6 +302,13 @@ void Song::resize_channels(int count) {
   arrangement_.resize(static_cast<std::size_t>(count), std::vector<int>(slots, -1));
 }
 
+void Song::resize_slots(int count) {
+  if (count < 1 || count > kMaxSongSlots) {
+    throw std::invalid_argument("Song length must be between 1 and 512 slots");
+  }
+  for (auto& row : arrangement_) row.resize(static_cast<std::size_t>(count), -1);
+}
+
 int Song::channel_count() const { return static_cast<int>(arrangement_.size()); }
 int Song::slot_count() const {
   return arrangement_.empty() ? 0 : static_cast<int>(arrangement_.front().size());
@@ -298,7 +321,7 @@ Engine::Engine() {
 Engine::~Engine() { shutdown(); }
 
 Channel Engine::make_preset_channel(const std::string& preset_id) {
-  const auto* preset = find_preset(preset_id);
+  const auto* preset = find_instrument_preset(preset_id);
   if (!preset) throw std::invalid_argument("Unknown instrument preset: " + preset_id);
   Channel channel(preset->name, preset->type);
   channel.builtin_id_ = preset->id;
@@ -314,8 +337,17 @@ Channel Engine::make_preset_channel(const std::string& preset_id) {
 
 std::vector<std::string> Engine::preset_ids() {
   std::vector<std::string> result;
-  result.reserve(kPresets.size());
-  for (const auto& preset : kPresets) result.emplace_back(preset.id);
+  const auto& presets = instrument_presets();
+  result.reserve(presets.size());
+  for (const auto& preset : presets) result.emplace_back(preset.id);
+  return result;
+}
+
+std::vector<std::tuple<std::string, std::string, std::string>> Engine::preset_catalog() {
+  std::vector<std::tuple<std::string, std::string, std::string>> result;
+  const auto& presets = instrument_presets();
+  result.reserve(presets.size());
+  for (const auto& preset : presets) result.emplace_back(preset.id, preset.name, preset.category);
   return result;
 }
 
@@ -480,7 +512,7 @@ bool Engine::save_project(const std::string& filename) const {
     }
     json root;
     root["format"] = "ConsoleSeq";
-    root["version"] = 2;
+    root["version"] = 3;
     root["bpm"] = state.bpm;
     root["loop"] = state.loop;
     root["song_mode"] = state.song_mode;
@@ -508,10 +540,23 @@ bool Engine::save_project(const std::string& filename) const {
     }
     root["song"] = state.song.arrangement_;
 
-    std::ofstream output(std::filesystem::u8path(filename), std::ios::binary | std::ios::trunc);
+    if (filename.empty()) throw std::runtime_error("project filename is empty");
+    const auto destination = std::filesystem::u8path(filename);
+    const auto parent = destination.parent_path();
+    if (!parent.empty()) {
+      std::error_code directory_error;
+      std::filesystem::create_directories(parent, directory_error);
+      if (directory_error) throw std::runtime_error("cannot create project directory: " + directory_error.message());
+    }
+    auto temporary = destination;
+    temporary += ".tmp";
+    std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
     if (!output) throw std::runtime_error("cannot open project for writing");
     output << root.dump(2) << '\n';
+    output.flush();
     if (!output) throw std::runtime_error("failed while writing project");
+    output.close();
+    replace_file_atomically(temporary, destination);
     return true;
   } catch (const std::exception& error) {
     std::lock_guard<std::mutex> lock(state_mutex_);
@@ -533,7 +578,7 @@ bool Engine::load_project(const std::string& filename) {
     if (!channels_json.is_array() || channels_json.empty()) {
       throw std::runtime_error("project has no channels");
     }
-    if (channels_json.size() > 32) throw std::runtime_error("project exceeds the 32-channel limit");
+    if (channels_json.size() > kMaxChannels) throw std::runtime_error("project exceeds the 32-channel limit");
 
     ProjectState loaded;
     loaded.bpm = clampf(root.value("bpm", 120.0F), 40.0F, 300.0F);
@@ -565,6 +610,9 @@ bool Engine::load_project(const std::string& filename) {
     if (!patterns_json.is_array() || patterns_json.empty()) {
       throw std::runtime_error("project has no patterns");
     }
+    if (patterns_json.size() > kMaxPatterns) {
+      throw std::runtime_error("project exceeds the 512-pattern limit");
+    }
     for (const auto& item : patterns_json) {
       const int steps = std::max(1, std::min(64, item.value("steps", kDefaultSteps)));
       Pattern pattern(static_cast<int>(loaded.channels.size()), steps,
@@ -585,7 +633,15 @@ bool Engine::load_project(const std::string& filename) {
     loaded.current_pattern = std::max(
         0, std::min(static_cast<int>(loaded.patterns.size()) - 1,
                     root.value("current_pattern", 0)));
-    loaded.song = Song(static_cast<int>(loaded.channels.size()), kDefaultSongSlots);
+    int loaded_song_slots = 0;
+    if (root.contains("song") && root["song"].is_array()) {
+      for (const auto& row : root["song"]) {
+        if (row.is_array()) loaded_song_slots = std::max(loaded_song_slots, static_cast<int>(row.size()));
+      }
+    }
+    if (loaded_song_slots < 1) loaded_song_slots = kDefaultSongSlots;
+    loaded_song_slots = std::min(kMaxSongSlots, loaded_song_slots);
+    loaded.song = Song(static_cast<int>(loaded.channels.size()), loaded_song_slots);
     if (root.contains("song") && root["song"].is_array()) {
       const auto& song_json = root["song"];
       for (std::size_t channel = 0;
@@ -662,6 +718,15 @@ void Engine::set_step_count(int count) {
   }
   stop();
 }
+
+void Engine::set_song_slot_count(int count) {
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    editable_.song.resize_slots(count);
+    publish_locked();
+  }
+  if (current_song_slot_atomic_.load() >= count) stop();
+}
 Channel Engine::get_channel(int index) const { std::lock_guard<std::mutex> lock(state_mutex_); return editable_.channels.at(static_cast<std::size_t>(index)); }
 Pattern Engine::get_pattern(int index) const { std::lock_guard<std::mutex> lock(state_mutex_); return editable_.patterns.at(static_cast<std::size_t>(index)); }
 Song Engine::get_song() const { std::lock_guard<std::mutex> lock(state_mutex_); return editable_.song; }
@@ -676,6 +741,9 @@ void Engine::clear_pattern(int pattern) { std::lock_guard<std::mutex> lock(state
 
 int Engine::add_pattern(const std::string& name) {
   std::lock_guard<std::mutex> lock(state_mutex_);
+  if (editable_.patterns.size() >= kMaxPatterns) {
+    throw std::runtime_error("The 512-pattern limit was reached");
+  }
   const int index = static_cast<int>(editable_.patterns.size());
   const int steps = editable_.patterns.empty() ? kDefaultSteps : editable_.patterns.front().step_count();
   editable_.patterns.emplace_back(static_cast<int>(editable_.channels.size()), steps,
@@ -683,8 +751,28 @@ int Engine::add_pattern(const std::string& name) {
   publish_locked(); return index;
 }
 
+int Engine::add_pattern_bank(int count) {
+  if (count < 1 || count > 64) throw std::invalid_argument("Pattern bank size must be between 1 and 64");
+  std::lock_guard<std::mutex> lock(state_mutex_);
+  if (editable_.patterns.size() + static_cast<std::size_t>(count) > kMaxPatterns) {
+    throw std::runtime_error("The 512-pattern limit would be exceeded");
+  }
+  const int first = static_cast<int>(editable_.patterns.size());
+  const int steps = editable_.patterns.empty() ? kDefaultSteps : editable_.patterns.front().step_count();
+  for (int offset = 0; offset < count; ++offset) {
+    const int index = first + offset;
+    editable_.patterns.emplace_back(static_cast<int>(editable_.channels.size()), steps,
+                                    "Pattern " + std::to_string(index + 1));
+  }
+  publish_locked();
+  return first;
+}
+
 int Engine::duplicate_pattern(int pattern) {
   std::lock_guard<std::mutex> lock(state_mutex_);
+  if (editable_.patterns.size() >= kMaxPatterns) {
+    throw std::runtime_error("The 512-pattern limit was reached");
+  }
   Pattern copy = editable_.patterns.at(static_cast<std::size_t>(pattern));
   copy.set_name(copy.name() + " Copy");
   editable_.patterns.push_back(std::move(copy)); publish_locked();
@@ -732,7 +820,7 @@ int Engine::add_channel(const std::string& preset_id, const std::string& name) {
   Channel channel = make_preset_channel(preset_id);
   if (!name.empty()) channel.set_name(name);
   std::lock_guard<std::mutex> lock(state_mutex_);
-  if (editable_.channels.size() >= 32) throw std::runtime_error("The 32-channel limit was reached");
+  if (editable_.channels.size() >= kMaxChannels) throw std::runtime_error("The 32-channel limit was reached");
   const int index = static_cast<int>(editable_.channels.size());
   editable_.channels.push_back(std::move(channel));
   const int base_note = editable_.channels.back().base_note_;
@@ -747,7 +835,7 @@ int Engine::add_channel(const std::string& preset_id, const std::string& name) {
 
 int Engine::duplicate_channel(int channel) {
   std::lock_guard<std::mutex> lock(state_mutex_);
-  if (editable_.channels.size() >= 32) throw std::runtime_error("The 32-channel limit was reached");
+  if (editable_.channels.size() >= kMaxChannels) throw std::runtime_error("The 32-channel limit was reached");
   if (channel < 0 || channel >= static_cast<int>(editable_.channels.size())) {
     throw std::out_of_range("Channel index is out of range");
   }
@@ -817,13 +905,13 @@ bool Engine::set_channel_sample(int channel, const std::string& filename) {
   auto sample = load_audio_file(filename);
   if (!sample || sample->empty()) {
     std::lock_guard<std::mutex> lock(state_mutex_);
-    last_error_ = "Could not decode WAV file; the built-in sound was kept";
+    last_error_ = "Could not decode WAV/MP3 file; the built-in sound was kept";
     return false;
   }
   std::lock_guard<std::mutex> lock(state_mutex_);
   auto& target = editable_.channels.at(static_cast<std::size_t>(channel));
-  if (target.type_ != ChannelType::Drum || !find_preset(target.builtin_id_) ||
-      find_preset(target.builtin_id_)->type != ChannelType::Drum) {
+  if (target.type_ != ChannelType::Drum || !find_instrument_preset(target.builtin_id_) ||
+      find_instrument_preset(target.builtin_id_)->type != ChannelType::Drum) {
     target.builtin_id_ = "perc_click";
   }
   target.sample_path_ = filename; target.sample_ = std::move(sample); target.type_ = ChannelType::Drum;
@@ -840,16 +928,21 @@ std::shared_ptr<const std::vector<float>> Engine::generate_builtin(const std::st
   if (sound == "kick") sound = "kick_punch";
   if (sound == "snare") sound = "snare_tight";
   if (sound == "hihat") sound = "hihat_closed";
-  const auto* definition = find_preset(sound);
+  const auto* definition = find_instrument_preset(sound);
   if (!definition || definition->type != ChannelType::Drum) return {};
   double length = 0.25;
-  if (sound == "kick_deep") length = 0.42;
+  if (sound == "kick_deep" || sound == "kick_trap_soft") length = 0.42;
   else if (sound == "kick_808") length = 0.58;
-  else if (sound == "snare_tight") length = 0.16;
-  else if (sound == "snare_big" || sound == "hihat_open") length = 0.42;
-  else if (sound == "clap") length = 0.28;
-  else if (sound == "hihat_closed" || sound == "perc_click") length = 0.08;
+  else if (sound == "kick_trap_hard" || sound == "kick_distorted" || sound == "kick_detroit") length = 0.30;
+  else if (sound == "snare_tight" || sound == "snare_trap" || sound == "rimshot") length = 0.16;
+  else if (sound == "snare_big" || sound == "snare_detroit" || sound == "hihat_open") length = 0.42;
+  else if (sound == "clap" || sound == "clap_trap") length = 0.28;
+  else if (sound == "hihat_closed" || sound == "hihat_short" || sound == "perc_click") length = 0.08;
+  else if (sound == "hihat_roll") length = 0.20;
   else if (sound == "tom_low" || sound == "tom_high") length = 0.36;
+  else if (sound == "fx_impact") length = 1.1;
+  else if (sound == "fx_riser" || sound == "fx_reverse") length = 1.8;
+  else if (sound == "fx_vinyl") length = 1.0;
   auto sample = std::make_shared<std::vector<float>>(static_cast<std::size_t>(length * kSampleRate));
   unsigned int seed = 0xC05E051U;
   for (const unsigned char character : sound) seed = seed * 33U + character;
@@ -861,13 +954,17 @@ std::shared_ptr<const std::vector<float>> Engine::generate_builtin(const std::st
   for (std::size_t i = 0; i < sample->size(); ++i) {
     const double time = static_cast<double>(i) / kSampleRate;
     float value = 0.0F;
-    if (sound == "kick_deep" || sound == "kick_punch" || sound == "kick_808") {
+    if (sound.rfind("kick_", 0) == 0) {
       const bool deep = sound == "kick_deep";
       const bool eight_oh_eight = sound == "kick_808";
-      const double base = eight_oh_eight ? 42.0 : (deep ? 43.0 : 50.0);
-      const double sweep = eight_oh_eight ? 88.0 : (deep ? 105.0 : 155.0);
-      const double sweep_rate = eight_oh_eight ? 11.0 : (deep ? 18.0 : 31.0);
-      const double decay = eight_oh_eight ? 6.2 : (deep ? 11.0 : 18.0);
+      const bool soft = sound == "kick_trap_soft";
+      const bool hard = sound == "kick_trap_hard";
+      const bool distorted = sound == "kick_distorted";
+      const bool detroit = sound == "kick_detroit";
+      const double base = eight_oh_eight ? 42.0 : (deep || soft ? 43.0 : (detroit ? 55.0 : 50.0));
+      const double sweep = eight_oh_eight ? 88.0 : (deep || soft ? 105.0 : (hard ? 210.0 : 155.0));
+      const double sweep_rate = eight_oh_eight ? 11.0 : (deep || soft ? 18.0 : 31.0);
+      const double decay = eight_oh_eight ? 6.2 : (deep ? 11.0 : (soft ? 9.5 : 18.0));
       const double frequency = base + sweep * std::exp(-time * sweep_rate);
       phase += 2.0 * kPi * frequency / kSampleRate;
       value = static_cast<float>(std::sin(phase) * std::exp(-time * decay));
@@ -875,29 +972,48 @@ std::shared_ptr<const std::vector<float>> Engine::generate_builtin(const std::st
         value += static_cast<float>(0.18 * (1.0 - 2.0 * time / .012) *
                                     std::exp(-time * 75.0) * (time < .012));
       }
-    } else if (sound == "snare_tight" || sound == "snare_big") {
+      if (hard) value += noise(random) * static_cast<float>(.11 * std::exp(-time * 85.0));
+      if (distorted) value = std::tanh(value * 5.5F) * .78F;
+      if (detroit) value += static_cast<float>(.16 * std::sin(phase * 1.5) * std::exp(-time * 28.0));
+    } else if (sound.rfind("snare_", 0) == 0) {
       const bool big = sound == "snare_big";
+      const bool trap = sound == "snare_trap";
+      const bool detroit = sound == "snare_detroit";
       const float raw = noise(random);
-      lowpass += (big ? .18F : .31F) * (raw - lowpass);
+      lowpass += (big || detroit ? .18F : .31F) * (raw - lowpass);
       const float band = raw - lowpass * (big ? .48F : .62F);
-      const float body = static_cast<float>(std::sin(2.0 * kPi * (big ? 165.0 : 205.0) * time));
-      value = (.76F * band + .34F * body) * static_cast<float>(std::exp(-time * (big ? 10.5 : 27.0)));
-    } else if (sound == "clap") {
+      const float body = static_cast<float>(std::sin(2.0 * kPi * (big ? 165.0 : (trap ? 225.0 : 205.0)) * time));
+      value = (.76F * band + .34F * body) * static_cast<float>(std::exp(-time * (big || detroit ? 10.5 : 27.0)));
+      if (trap) value = std::tanh(value * 2.4F) * .72F;
+      if (detroit && time > .045) value += .18F * noise(random) * static_cast<float>(std::exp(-(time - .045) * 18.0));
+    } else if (sound == "clap" || sound == "clap_trap") {
       const float raw = noise(random);
       lowpass += .16F * (raw - lowpass);
       const float high = raw - lowpass;
       double envelope = 0.0;
-      for (double start : {0.0, .032, .064}) {
+      for (double start : {0.0, .028, .057}) {
         if (time >= start) envelope += std::exp(-(time - start) * 72.0);
       }
       if (time >= .085) envelope += .55 * std::exp(-(time - .085) * 16.0);
       value = high * static_cast<float>(.46 * envelope);
-    } else if (sound == "hihat_closed" || sound == "hihat_open") {
+      if (sound == "clap_trap") value = std::tanh(value * 2.8F) * .72F;
+    } else if (sound == "rimshot") {
+      phase += 2.0 * kPi * (1450.0 + 850.0 * std::exp(-time * 90.0)) / kSampleRate;
+      value = static_cast<float>((.72 * std::sin(phase) + .22 * noise(random)) * std::exp(-time * 62.0));
+    } else if (sound.rfind("hihat_", 0) == 0) {
       const float raw = noise(random);
-      const float high = raw - previous_noise * 0.92F;
+      const float high = raw - previous_noise * (sound == "hihat_metal" ? .70F : .92F);
       previous_noise = raw;
-      const double decay = sound == "hihat_open" ? 11.0 : 76.0;
-      value = high * static_cast<float>(0.54 * std::exp(-time * decay));
+      const double decay = sound == "hihat_open" ? 11.0 : (sound == "hihat_short" ? 115.0 : 76.0);
+      double envelope = std::exp(-time * decay);
+      if (sound == "hihat_roll") {
+        envelope = 0.0;
+        for (double start : {0.0, .050, .100, .150}) {
+          if (time >= start) envelope += std::exp(-(time - start) * 95.0);
+        }
+      }
+      value = high * static_cast<float>(0.54 * envelope);
+      if (sound == "hihat_metal") value += static_cast<float>(.16 * std::sin(2.0 * kPi * 9173.0 * time) * envelope);
     } else if (sound == "tom_low" || sound == "tom_high") {
       const bool high = sound == "tom_high";
       const double base = high ? 145.0 : 82.0;
@@ -905,10 +1021,42 @@ std::shared_ptr<const std::vector<float>> Engine::generate_builtin(const std::st
       phase += 2.0 * kPi * frequency / kSampleRate;
       value = static_cast<float>((std::sin(phase) + .18 * std::sin(phase * 2.0)) *
                                  std::exp(-time * (high ? 15.0 : 10.5)));
-    } else if (sound == "perc_click") {
-      phase += 2.0 * kPi * (1250.0 + 900.0 * std::exp(-time * 80.0)) / kSampleRate;
+    } else if (sound == "shaker") {
+      const float raw = noise(random);
+      const float high = raw - previous_noise * .96F;
+      previous_noise = raw;
+      value = high * static_cast<float>(.42 * std::exp(-time * 32.0));
+    } else if (sound == "cowbell") {
+      const double first = std::sin(2.0 * kPi * 540.0 * time) > 0.0 ? 1.0 : -1.0;
+      const double second = std::sin(2.0 * kPi * 805.0 * time) > 0.0 ? 1.0 : -1.0;
+      value = static_cast<float>((.42 * first + .34 * second) * std::exp(-time * 18.0));
+    } else if (sound.rfind("perc_", 0) == 0) {
+      double frequency = 1250.0;
+      if (sound == "perc_newjazz") frequency = 780.0;
+      else if (sound == "perc_jerk") frequency = 1680.0;
+      else if (sound == "perc_detroit") frequency = 510.0;
+      phase += 2.0 * kPi * (frequency + 900.0 * std::exp(-time * 80.0)) / kSampleRate;
       value = static_cast<float>((.65 * std::sin(phase) + .25 * noise(random)) *
                                  std::exp(-time * 72.0));
+      if (sound == "perc_jerk") value = std::tanh(value * 3.0F) * .65F;
+    } else if (sound == "fx_impact") {
+      phase += 2.0 * kPi * (38.0 + 120.0 * std::exp(-time * 12.0)) / kSampleRate;
+      value = static_cast<float>((.62 * std::sin(phase) + .34 * noise(random)) * std::exp(-time * 4.2));
+    } else if (sound == "fx_riser" || sound == "fx_reverse") {
+      const double progress = time / length;
+      const float raw = noise(random);
+      const float high = raw - previous_noise * .90F;
+      previous_noise = raw;
+      // Keep the riser audible from its trigger while retaining the upward swell.
+      const double envelope = sound == "fx_riser"
+                                  ? .08 + .92 * progress * progress
+                                  : std::pow(progress, 1.4);
+      value = high * static_cast<float>(.46 * envelope);
+    } else if (sound == "fx_vinyl") {
+      const float raw = noise(random);
+      lowpass += .035F * (raw - lowpass);
+      const float crackle = noise(random) > .992F ? noise(random) * .75F : 0.0F;
+      value = lowpass * .22F + crackle;
     }
     (*sample)[i] = clampf(value, -1.0F, 1.0F);
   }
@@ -924,38 +1072,39 @@ std::shared_ptr<const std::vector<float>> Engine::load_audio_file(const std::str
 #else
   SNDFILE* file = sf_open(filename.c_str(), SFM_READ, &info);
 #endif
-  if (!file || info.frames <= 0 || info.channels <= 0 || info.samplerate <= 0) {
-    if (file) sf_close(file);
-    return {};
-  }
-  std::vector<float> interleaved(static_cast<std::size_t>(info.frames) * static_cast<std::size_t>(info.channels));
-  const sf_count_t frames_read = sf_readf_float(file, interleaved.data(), info.frames);
-  sf_close(file);
-  if (frames_read <= 0) return {};
-  std::vector<float> mono(static_cast<std::size_t>(frames_read));
-  for (sf_count_t frame = 0; frame < frames_read; ++frame) {
-    float sum = 0.0F;
-    for (int channel = 0; channel < info.channels; ++channel) {
-      sum += interleaved[static_cast<std::size_t>(frame) * static_cast<std::size_t>(info.channels) + static_cast<std::size_t>(channel)];
+  if (file && info.frames > 0 && info.channels > 0 && info.samplerate > 0) {
+    std::vector<float> interleaved(static_cast<std::size_t>(info.frames) *
+                                   static_cast<std::size_t>(info.channels));
+    const sf_count_t frames_read = sf_readf_float(file, interleaved.data(), info.frames);
+    sf_close(file);
+    if (frames_read > 0) {
+      return convert_to_engine_sample(interleaved.data(), static_cast<std::uint64_t>(frames_read),
+                                      info.channels, info.samplerate);
     }
-    mono[static_cast<std::size_t>(frame)] = sum / static_cast<float>(info.channels);
+  } else if (file) {
+    sf_close(file);
   }
-  if (info.samplerate == static_cast<int>(kSampleRate)) return std::make_shared<const std::vector<float>>(std::move(mono));
-  const auto output_size = static_cast<std::size_t>(std::ceil(static_cast<double>(mono.size()) * kSampleRate / info.samplerate));
-  auto output = std::make_shared<std::vector<float>>(output_size);
-  const double ratio = static_cast<double>(info.samplerate) / kSampleRate;
-  for (std::size_t i = 0; i < output_size; ++i) {
-    const double position = i * ratio;
-    const std::size_t left = std::min(static_cast<std::size_t>(position), mono.size() - 1);
-    const std::size_t right = std::min(left + 1, mono.size() - 1);
-    const float fraction = static_cast<float>(position - static_cast<double>(left));
-    (*output)[i] = mono[left] + (mono[right] - mono[left]) * fraction;
-  }
-  return output;
-#else
-  (void)filename;
-  return {};
 #endif
+
+  std::ifstream input(std::filesystem::u8path(filename), std::ios::binary);
+  if (!input) return {};
+  input.seekg(0, std::ios::end);
+  const auto byte_count = input.tellg();
+  if (byte_count <= 0 || byte_count > static_cast<std::streamoff>(256 * 1024 * 1024)) return {};
+  input.seekg(0, std::ios::beg);
+  std::vector<unsigned char> encoded(static_cast<std::size_t>(byte_count));
+  input.read(reinterpret_cast<char*>(encoded.data()), byte_count);
+  if (!input) return {};
+  drmp3_config config{};
+  drmp3_uint64 frame_count = 0;
+  float* decoded = drmp3_open_memory_and_read_pcm_frames_f32(
+      encoded.data(), encoded.size(), &config, &frame_count, nullptr);
+  if (!decoded) return {};
+  auto result = convert_to_engine_sample(decoded, frame_count,
+                                         static_cast<int>(config.channels),
+                                         static_cast<int>(config.sampleRate));
+  drmp3_free(decoded, nullptr);
+  return result;
 }
 
 double Engine::midi_frequency(int note) { return 440.0 * std::pow(2.0, (clamp_note(note) - 69) / 12.0); }
@@ -1013,14 +1162,55 @@ float Engine::render_voice(Voice& voice, const Channel& channel) {
     voice.phase += frequency / kSampleRate;
     if (voice.phase >= 1.0) voice.phase -= std::floor(voice.phase);
     if (channel.type_ == ChannelType::Piano) {
-      value = static_cast<float>(std::sin(2.0 * kPi * voice.phase) +
-                                 (0.10 + channel.tone_ * .34) * std::sin(4.0 * kPi * voice.phase) +
-                                 (0.03 + channel.tone_ * .13) * std::sin(6.0 * kPi * voice.phase));
-      value *= static_cast<float>(std::exp(-voice.age * (2.8 + channel.tone_ * 2.5)));
+      if (channel.builtin_id_ == "rhodes" || channel.builtin_id_ == "electric_keys") {
+        const double modulation = (channel.builtin_id_ == "rhodes" ? 1.4 : 2.2) *
+                                  std::sin(4.0 * kPi * voice.phase);
+        value = static_cast<float>(std::sin(2.0 * kPi * voice.phase + modulation) +
+                                   .18 * std::sin(6.0 * kPi * voice.phase));
+        value *= static_cast<float>(std::exp(-voice.age * 2.5));
+      } else {
+        const double grand = channel.builtin_id_ == "piano_grand" ? .12 : 0.0;
+        value = static_cast<float>(std::sin(2.0 * kPi * voice.phase) +
+                                   (0.10 + channel.tone_ * .34) * std::sin(4.0 * kPi * voice.phase) +
+                                   (0.03 + channel.tone_ * .13 + grand) * std::sin(6.0 * kPi * voice.phase) +
+                                   grand * std::sin(8.02 * kPi * voice.phase));
+        const float hammer = static_cast<float>(std::sin(26.0 * kPi * voice.phase) *
+                                                std::exp(-voice.age * 55.0));
+        value = value * static_cast<float>(std::exp(-voice.age * (2.8 + channel.tone_ * 2.5))) +
+                hammer * (.05F + channel.tone_ * .07F);
+      }
     } else {
-      if (channel.oscillator_ == Oscillator::Sine) value = static_cast<float>(std::sin(2.0 * kPi * voice.phase));
-      else if (channel.oscillator_ == Oscillator::Square) value = voice.phase < 0.5 ? 0.8F : -0.8F;
-      else value = static_cast<float>(2.0 * voice.phase - 1.0);
+      const bool guitar = channel.builtin_id_.rfind("guitar_", 0) == 0;
+      const bool strings = channel.builtin_id_.rfind("strings_", 0) == 0;
+      const bool fm = channel.builtin_id_.rfind("fm_", 0) == 0 || channel.builtin_id_ == "lead_fm";
+      if (guitar) {
+        const double brightness = .18 + channel.tone_ * .34;
+        value = static_cast<float>(std::sin(2.0 * kPi * voice.phase) +
+                                   brightness * std::sin(4.0 * kPi * voice.phase) +
+                                   brightness * .48 * std::sin(6.0 * kPi * voice.phase) +
+                                   .08 * std::sin(10.0 * kPi * voice.phase));
+        value *= static_cast<float>(std::exp(-voice.age *
+            (channel.builtin_id_ == "guitar_acoustic" ? 3.8 : 2.2)));
+      } else if (strings) {
+        const double detuned = std::fmod(voice.phase * 1.006, 1.0);
+        value = static_cast<float>((2.0 * voice.phase - 1.0) * .48 +
+                                   (2.0 * detuned - 1.0) * .34 +
+                                   .25 * std::sin(2.0 * kPi * voice.phase));
+      } else if (fm) {
+        const double ratio = channel.builtin_id_ == "fm_bell" ? 3.5 : 2.0;
+        const double amount = channel.builtin_id_ == "fm_bell" ? 5.2 : 2.6;
+        value = static_cast<float>(std::sin(2.0 * kPi * voice.phase +
+                                           amount * std::sin(2.0 * kPi * ratio * voice.phase)));
+        if (channel.builtin_id_ == "fm_bell") value *= static_cast<float>(std::exp(-voice.age * 4.5));
+      } else if (channel.oscillator_ == Oscillator::Sine) {
+        value = static_cast<float>(std::sin(2.0 * kPi * voice.phase));
+      } else if (channel.oscillator_ == Oscillator::Square) {
+        value = voice.phase < 0.5 ? 0.8F : -0.8F;
+      } else if (channel.oscillator_ == Oscillator::Triangle) {
+        value = static_cast<float>(1.0 - 4.0 * std::abs(voice.phase - .5));
+      } else {
+        value = static_cast<float>(2.0 * voice.phase - 1.0);
+      }
       if (channel.type_ == ChannelType::Bass || channel.tone_ < .99F) {
         const float base_cutoff = 140.0F + channel.tone_ * 1800.0F;
         const float sweep = channel.type_ == ChannelType::Bass ?
