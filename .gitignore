@@ -17,4 +17,5 @@ console_seq/*.dll
 *.pyc
 __pycache__/
 *.cseq
+!new_jazz.cseq
 *.zip

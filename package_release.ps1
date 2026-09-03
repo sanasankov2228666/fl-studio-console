@@ -26,7 +26,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $ProjectRoot "ConsoleSeq.exe"))) {
 Remove-GeneratedDirectory $GeneratedRoot
 New-Item -ItemType Directory -Force -Path $PackageRoot | Out-Null
 
-foreach ($directory in @("assets", "src")) {
+foreach ($directory in @("assets", "src", "scripts")) {
     Copy-Item -LiteralPath (Join-Path $ProjectRoot $directory) -Destination $PackageRoot -Recurse
 }
 New-Item -ItemType Directory -Force -Path (Join-Path $PackageRoot "tests") | Out-Null
@@ -42,7 +42,7 @@ $topLevel = @(
     "main.py", "requirements.txt", "requirements-build.txt", "setup.cmd", "setup.ps1", "setup.sh",
     "run.cmd", "run.ps1", "run.sh", "build_exe.cmd", "build_exe.ps1",
     "build_installer.cmd", "build_installer.ps1", "package_release.cmd", "package_release.ps1",
-    "ConsoleSeq.exe", "ConsoleSeq-Setup.exe"
+    "ConsoleSeq.exe", "ConsoleSeq-Setup.exe", "new_jazz.cseq"
 )
 foreach ($name in $topLevel) {
     $source = Join-Path $ProjectRoot $name

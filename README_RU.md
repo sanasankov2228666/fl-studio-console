@@ -50,6 +50,22 @@ Set-Location 'D:\фигня\fl_studio'
 
 Важно: `P` запускает/останавливает музыку. `Space` редактирует текущую ячейку и не управляет транспортом.
 
+## Готовый new jazz бит
+
+В корне проекта находится `new_jazz.cseq`: аранжировка на 24 такта при 130 BPM с интро, двумя основными грувами, fill, breakdown, drop и outro. В ней используются Yakittido New Jazz и Hard Times one-shot’ы, питченная 808, Live Rhodes, pluck, FM bell, jazz guitar и pad.
+
+Чтобы открыть бит, нажмите `L`, введите `new_jazz.cseq` и нажмите `Enter`. Проект загружается сразу в Song Mode; нажмите `P` для воспроизведения всей аранжировки. Для запуска напрямую:
+
+```powershell
+.\ConsoleSeq.exe .\new_jazz.cseq
+```
+
+Исходный генератор находится в `scripts\create_new_jazz.py`. Повторное создание проекта из исходников:
+
+```powershell
+.\.venv-win\Scripts\python.exe .\scripts\create_new_jazz.py .\new_jazz.cseq
+```
+
 ## Экран
 
 - **Top Bar**: BPM, AUDIO/SILENT, PLAY/STOP, режим, текущие Pattern/Step/Slot.
